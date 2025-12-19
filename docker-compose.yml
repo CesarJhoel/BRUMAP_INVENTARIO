@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  brumap_inventario:
+    build: .
+    container_name: brumap_inventario
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: "production"
+      COOKIE_SECURE: "0"
+      SESSION_SECRET: "cambia_esto_en_local"
+    volumes:
+      - ./Data:/usr/src/app/Data
+    restart: unless-stopped

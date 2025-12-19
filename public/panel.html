@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Brumap Inventario</title>
+  <link rel="stylesheet" href="./assets/css/style.css">
+  <link rel="icon" type="image/png" href="./assets/img/favicon.png">
+</head>
+<body class="bg-app">
+
+<!-- BARRA SUPERIOR -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <!-- IZQUIERDA: logo + texto -->
+    <div class="top-left">
+      <button class="btn-small btn-white mobile-menu-btn" type="button" id="btnMobileMenu" aria-label="Abrir menú">☰</button>
+      <img src="./assets/img/brumap_logo.png" class="top-logo" alt="Brumap">
+      <span class="top-brand">BRUMAP</span>
+    </div>
+
+    <!-- CENTRO: exportaciones completas -->
+    <div class="top-center">
+      <button class="btn-small btn-white export-full" type="button" data-export="registros" data-format="pdf" data-all="1" id="pdfAllRegistros">
+        <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
+        <span>PDF Registros Completos</span>
+      </button>
+      <button class="btn-small btn-white export-full" type="button" data-export="registros" data-format="xlsx" data-all="1" id="xlsxAllRegistros">
+        <span class="excel-badge">X</span>
+        <span>Excel Registros Completos</span>
+      </button>
+    </div>
+
+    <!-- DERECHA: salir -->
+    <div class="top-right">
+      <button class="btn-small" id="themeToggle" type="button">
+        <img src="./assets/img/icon_theme.svg" alt="" class="icon-img">
+        <span>Tema</span>
+      </button>
+      <button class="btn-small" id="logoutBtn">
+        <img src="./assets/img/icon_logout.svg" alt="" class="icon-img">
+        <span>Salir</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
+
+<!-- MENÚ LATERAL -->
+<aside class="sidebar" id="sidebar">
+  <nav class="menu">
+    <a class="menu-item active" href="#recepciones">
+      <img src="./assets/img/icon_recepciones.svg" alt="" class="icon-img">
+      <span>Recepción de Materiales</span>
+    </a>
+
+    
+    <a class="menu-item" href="#stock">
+      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
+      <span>Stock de materiales</span>
+    </a>
+<a class="menu-item" href="#produccion">
+      <img src="./assets/img/icon_produccion.svg" alt="" class="icon-img">
+      <span>Producción</span>
+    </a>
+
+    <a class="menu-item" href="#defectuosos">
+      <img src="./assets/img/icon_defectuosos.svg" alt="" class="icon-img">
+      <span>Manejo de Material Defectuoso</span>
+    </a>
+
+    <a class="menu-item" href="#envios">
+      <img src="./assets/img/icon_envios.svg" alt="" class="icon-img">
+      <span>Envío de Productos Terminados</span>
+    </a>
+
+	    <a class="menu-item only-supervisor" href="#maquinaria">
+	      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
+	      <span>Maquinaria</span>
+	    </a>
+
+	    <a class="menu-item only-supervisor" href="#repuestos">
+	      <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
+	      <span>Repuestos e Inventario</span>
+	    </a>
+
+    <a class="menu-item only-supervisor" href="#advanced">
+      <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
+      <span>Opciones avanzadas</span>
+    </a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <span id="whoami" class="tag">Usuario Brumap</span>
+  </div>
+</aside>
+
+<!-- CONTENIDO PRINCIPAL -->
+<main class="workspace">
+
+  <!-- RECEPCIÓN -->
+  <section class="section" id="recepciones">
+    <h3 class="panel-title">Recepción de Materiales</h3>
+
+    <form class="form two-col card" data-form="recepciones">
+<input class="input col-span" placeholder="Tipo de material" name="tipo" required>
+
+      <input class="input col-span" placeholder="Etiqueta" name="etiqueta">
+
+      <input class="input input-qty" placeholder="Cantidad" name="cantidad" type="number" min="1" required>
+      <select class="input input-unit" name="unidad" required>
+        <option value="kg">Kilogramos</option>
+        <option value="cajas">Cajas</option>
+        <option value="unidades">Unidades</option>
+      </select>
+
+      <div class="date-row col-span">
+        <input class="input input-datetime" type="datetime-local" name="fecha" required>
+        <button class="btn-small btn-white now-btn" type="button" data-now="recepciones">
+          <span>Ahora</span>
+        </button>
+      </div>
+
+      <div class="col-span actions-row">
+      <div class="col-span actions-row actions-split">
+		<div class="actions-left">
+		  <button class="btn btn-white btn-uniform" type="button" data-export="recepciones" data-format="xlsx" data-all="1">
+          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
+          <span>Exportar Excel</span>
+        </button>
+		<button class="btn btn-white btn-uniform" type="button" data-export="recepciones" data-format="pdf" data-all="1">
+          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
+          <span>Exportar PDF</span>
+        </button>
+
+		<button class="btn btn-white btn-uniform no-operario" type="button" id="btnToggleAjusteRecep">
+          <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
+          <span>Modificar entrada actual</span>
+        </button>
+        </div>
+        <div class="actions-right">
+          <button class="btn btn-primary" type="submit">Registrar Recepción</button>
+        </div>
+      </div>
+</div>
+
+    <!-- AJUSTE DE STOCK (solo administrador/supervisor) -->
+    <div class="card mt-sm no-operario" id="ajusteRecepBox" style="display:none;">
+      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Modificar entrada actual (Ajuste de stock)</h4>
+      <div class="subtitle">
+        Esta opción crea un <b>ajuste de stock</b> para un material ya registrado. Los movimientos previos quedarán en el historial,
+        pero <b>dejarán de influir</b> en el stock actual (desde este momento el stock se recalculará tomando como base la cantidad ingresada).
+      </div>
+
+      <div class="actions-row mt-sm">
+        <select class="input inline-edit select-compact" id="ajusteRecepSelect"></select>
+        <input class="input inline-edit" id="ajusteRecepCantidad" type="number" min="0" placeholder="Nueva cantidad base">
+        <input class="input inline-edit" id="ajusteRecepFecha" type="datetime-local">
+        <button class="btn-small btn-white" type="button" id="ajusteRecepNow">Ahora</button>
+        <button class="btn-small" type="button" id="ajusteRecepApply">Aplicar ajuste</button>
+      </div>
+
+      <p class="subtitle mt-sm">
+        Advertencia: aplicar un ajuste cambiará el stock de este material. Confirma antes de continuar.
+      </p>
+      <p id="ajusteRecepStatus" class="subtitle mt-sm"></p>
+    </div></form>
+
+    <!-- Filtro por rango de fechas + contador + exportaciones por selección -->
+    <div class="card mt-lg" data-filter-scope="recepciones">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="recepciones" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="recepciones" aria-label="Hasta">
+
+        
+        <input class="input input-search" type="text" data-filter-q="recepciones" placeholder="Buscar...">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="recepciones" placeholder="Min">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="recepciones" placeholder="Max">
+        <select class="input inline-edit select-compact" data-sort-scope="recepciones" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+
+<button class="btn-small btn-white" type="button" data-filter-apply="recepciones">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="recepciones">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="recepciones">Mostrar todo</button>
+
+        <span class="tag">Registros: <b id="count-recepciones">0</b></span>
+
+        <button class="btn-small btn-white" type="button" data-export="recepciones" data-format="xlsx">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn-small btn-white" type="button" data-export="recepciones" data-format="pdf">
+          <span>Exportar PDF</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+      <table class="table" data-table="recepciones">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th class="col-tipo">Tipo</th>
+            <th class="col-etiqueta">Etiqueta</th>
+            <th>Cantidad</th>
+            <th>Unidad</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+
+  <!-- STOCK -->
+  <section class="section" id="stock">
+    <h3 class="panel-title">Stock de materiales</h3>
+
+    <div class="card">
+      <div class="actions-row stock-toolbar">
+        <button class="btn-small btn-white" type="button" id="btnShowStock">Ver stock actual</button>
+        <button class="btn-small btn-white only-supervisor" type="button" id="btnShowRetiros">Historial de retiros</button>
+	        <button class="btn-small btn-white" type="button" id="btnExportStockXlsx" data-export="stock" data-format="xlsx" data-all="1">
+	          <img src="./assets/img/icon_backup.svg" alt="" class="icon-img"> Exportar Excel
+	        </button>
+	        <button class="btn-small btn-white" type="button" id="btnExportStockPdf" data-export="stock" data-format="pdf" data-all="1">
+	          <img src="./assets/img/icon_backup.svg" alt="" class="icon-img"> Exportar PDF
+	        </button>
+        <span class="tag">Materiales: <b id="count-stock">0</b></span>
+      </div>
+      <p id="stockMsg" class="subtitle mt-sm"></p>
+    </div>
+
+    <div class="card mt-lg" data-filter-scope="stock">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="stock" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="stock" aria-label="Hasta">
+        <input class="input input-search" type="text" data-filter-q="stock" placeholder="Buscar...">
+        <select class="input inline-edit select-compact" data-sort-scope="stock" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+        <button class="btn-small btn-white" type="button" data-filter-apply="stock">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="stock">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="stock">Mostrar todo</button>
+      </div>
+    </div>
+
+    <div class="card mt-lg only-supervisor" id="stockRetiroCard">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Retiro de materiales</div>
+      <form class="actions-row" id="stockRetiroForm">
+        <select class="input inline-edit select-compact" id="stock_tipo" required></select>
+        <input class="input input-qty" id="stock_cantidad" type="number" min="1" step="1" placeholder="Cantidad" required>
+        <input class="input inline-edit" id="stock_unidad" placeholder="Unidad" readonly>
+        <button class="btn-small" type="submit">Retirar</button>
+	        <button class="btn-small btn-white" type="button" id="btnDeleteStockItem">Eliminar Producto</button>
+      </form>
+    </div>
+
+    <div class="card mt-lg" id="stockTableCard">
+      <table class="table" id="stockTable">
+        <thead>
+          <tr>
+            <th class="col-material">Material</th>
+            <th class="col-etiqueta">Etiqueta</th>
+            <th class="col-num">Cantidad</th>
+            <th class="col-num">Unidad</th>
+            <th class="col-status">Estado</th>
+            <th class="col-date">Actualizado</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card mt-lg" id="retirosTableCard" style="display:none;">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="stock_retiros" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="stock_retiros" aria-label="Hasta">
+        <input class="input input-search" type="text" data-filter-q="stock_retiros" placeholder="Buscar...">
+        <select class="input inline-edit select-compact" data-sort-scope="stock_retiros" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+        <button class="btn-small btn-white" type="button" data-filter-apply="stock_retiros">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="stock_retiros">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="stock_retiros">Mostrar todo</button>
+      </div>
+
+	      <div class="actions-row retiros-actions" style="justify-content:flex-end; gap:8px; margin-bottom:10px;">
+	        <button class="btn-small btn-white only-supervisor" type="button" data-export="stock_retiros" data-format="xlsx" data-all="1">
+	          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img-sm"> Excel
+	        </button>
+	        <button class="btn-small btn-white only-supervisor" type="button" data-export="stock_retiros" data-format="pdf" data-all="1">
+	          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img-sm"> PDF
+	        </button>
+	      </div>
+      <table class="table" id="retirosTable">
+        <thead>
+          <tr>
+            <th class="col-date">Fecha</th>
+            <th class="col-material">Material</th>
+            <th class="col-num">Cantidad</th>
+            <th class="col-num">Unidad</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- PRODUCCIÓN -->
+  <section class="section" id="produccion">
+    <h3 class="panel-title">Producción</h3>
+
+    <form class="form two-col card" data-form="produccion">
+<input class="input col-span" placeholder="Tipo de producto" name="tipo" required>
+
+      <input class="input input-qty" placeholder="Cantidad Fabricada" name="cantidad" type="number" min="1" required>
+      <select class="input input-unit" name="unidad" required>
+        <option value="kg">Kilogramos</option>
+        <option value="cajas">Cajas</option>
+        <option value="unidades">Unidades</option>
+      </select>
+
+      <div class="date-row col-span">
+        <input class="input input-datetime" type="datetime-local" name="fecha_ini" placeholder="Fecha y hora de producción" required>
+        <button class="btn-small btn-white now-btn" type="button" data-now="produccion">
+          <span>Ahora</span>
+        </button>
+      </div>
+
+      <div class="col-span actions-row">
+      <div class="col-span actions-row actions-split">
+        <div class="actions-left">
+          <button class="btn btn-white" type="button" data-export="produccion" data-format="xlsx" data-all="1">
+          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn btn-white" type="button" data-export="produccion" data-format="pdf" data-all="1">
+          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
+          <span>Exportar PDF</span>
+        </button>
+        </div>
+        <div class="actions-right">
+          <button class="btn btn-primary" type="submit">Registrar Producción</button>
+        </div>
+      </div>
+</div>
+</form>
+
+    <div class="card mt-lg" data-filter-scope="produccion">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="produccion" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="produccion" aria-label="Hasta">
+
+        
+        <input class="input input-search" type="text" data-filter-q="produccion" placeholder="Buscar...">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="produccion" placeholder="Min">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="produccion" placeholder="Max">
+        <select class="input inline-edit select-compact" data-sort-scope="produccion" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+
+<button class="btn-small btn-white" type="button" data-filter-apply="produccion">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="produccion">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="produccion">Mostrar todo</button>
+
+        <span class="tag">Registros: <b id="count-produccion">0</b></span>
+
+        <button class="btn-small btn-white" type="button" data-export="produccion" data-format="xlsx">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn-small btn-white" type="button" data-export="produccion" data-format="pdf">
+          <span>Exportar PDF</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+      <table class="table" data-table="produccion">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th class="col-tipo">Tipo de producto</th>
+            <th>Cantidad</th>
+            <th>Unidad</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- DEFECTUOSOS -->
+  <section class="section" id="defectuosos">
+    <h3 class="panel-title">Manejo de Material Defectuoso</h3>
+
+    <form class="form two-col card" data-form="defectuosos">
+<input class="input col-span" placeholder="Tipo de material" name="tipo" required>
+
+      <input class="input input-qty" placeholder="Cantidad descartada" name="cantidad" type="number" min="1" required>
+      <select class="input input-unit" name="unidad" required>
+        <option value="kg">Kilogramos</option>
+        <option value="cajas">Cajas</option>
+        <option value="unidades">Unidades</option>
+      </select>
+
+      <input class="input col-span input-razon" placeholder="Razón del descarte" name="razon">
+
+      <div class="date-row col-span">
+        <input class="input input-date" type="date" name="fecha" required>
+        <button class="btn-small btn-white now-btn" type="button" data-now="defectuosos">
+          <span>Ahora</span>
+        </button>
+      </div>
+
+      <div class="col-span actions-row">
+      <div class="col-span actions-row actions-split">
+        <div class="actions-left">
+          <button class="btn btn-white" type="button" data-export="defectuosos" data-format="xlsx" data-all="1">
+          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn btn-white" type="button" data-export="defectuosos" data-format="pdf" data-all="1">
+          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
+          <span>Exportar PDF</span>
+        </button>
+        </div>
+        <div class="actions-right">
+          <button class="btn btn-primary" type="submit">Registrar Descarte</button>
+        </div>
+      </div>
+</div>
+</form>
+
+
+    <div class="card mt-lg" data-filter-scope="defectuosos">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="defectuosos" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="defectuosos" aria-label="Hasta">
+
+        
+        <input class="input input-search" type="text" data-filter-q="defectuosos" placeholder="Buscar...">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="defectuosos" placeholder="Min">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="defectuosos" placeholder="Max">
+        <select class="input inline-edit select-compact" data-sort-scope="defectuosos" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+
+<button class="btn-small btn-white" type="button" data-filter-apply="defectuosos">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="defectuosos">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="defectuosos">Mostrar todo</button>
+
+        <span class="tag">Registros: <b id="count-defectuosos">0</b></span>
+
+        <button class="btn-small btn-white" type="button" data-export="defectuosos" data-format="xlsx">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn-small btn-white" type="button" data-export="defectuosos" data-format="pdf">
+          <span>Exportar PDF</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+      <table class="table" data-table="defectuosos">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th class="col-tipo">Tipo</th>
+            <th>Cantidad</th>
+            <th>Unidad</th>
+            <th>Razón</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ENVÍOS -->
+  <section class="section" id="envios">
+    <h3 class="panel-title">Envío de Productos Terminados</h3>
+
+    <form class="form two-col card" data-form="envios">
+<input class="input input-qty" placeholder="Cantidad" name="cantidad" type="number" min="1" required>
+      <select class="input input-unit" name="unidad" required>
+        <option value="kg">Kilogramos</option>
+        <option value="cajas">Cajas</option>
+        <option value="unidades">Unidades</option>
+      </select>
+
+      <input class="input col-span" placeholder="Tipo (ej: Rollos PEAD)" name="tipo" required>
+
+      <input class="input input-detalle" placeholder="Detalle del tipo (texto)" name="descripcion">
+      <input class="input input-cliente" placeholder="Cliente" name="cliente" required>
+
+      <div class="date-row col-span">
+        <input class="input input-date" type="date" name="fecha" required>
+        <button class="btn-small btn-white now-btn" type="button" data-now="envios">
+          <span>Ahora</span>
+        </button>
+      </div>
+
+      <div class="col-span actions-row">
+      <div class="col-span actions-row actions-split">
+        <div class="actions-left">
+          <button class="btn btn-white" type="button" data-export="envios" data-format="xlsx" data-all="1">
+          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn btn-white" type="button" data-export="envios" data-format="pdf" data-all="1">
+          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
+          <span>Exportar PDF</span>
+        </button>
+        </div>
+        <div class="actions-right">
+          <button class="btn btn-primary" type="submit">Registrar Envío</button>
+        </div>
+      </div>
+</div>
+</form>
+
+    <!-- Filtro por rango de fechas + contador + exportaciones -->
+    <div class="card mt-lg" data-filter-scope="envios">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="envios" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="envios" aria-label="Hasta">
+
+        
+        <input class="input input-search" type="text" data-filter-q="envios" placeholder="Buscar...">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="envios" placeholder="Min">
+        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="envios" placeholder="Max">
+        <select class="input inline-edit select-compact" data-sort-scope="envios" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+
+<button class="btn-small btn-white" type="button" data-filter-apply="envios">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="envios">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="envios">Mostrar todo</button>
+
+        <span class="tag">Registros: <b id="count-envios">0</b></span>
+
+        <button class="btn-small btn-white" type="button" data-export="envios" data-format="xlsx">
+          <span>Exportar Excel</span>
+        </button>
+        <button class="btn-small btn-white" type="button" data-export="envios" data-format="pdf">
+          <span>Exportar PDF</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+      <table class="table" data-table="envios">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Cliente</th>
+            <th class="col-tipo">Tipo</th>
+            <th class="col-detalle">Detalle</th>
+            <th>Cantidad</th>
+            <th>Unidad</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+	  <!-- MAQUINARIA (solo supervisor) -->
+	  <section class="section only-supervisor" id="maquinaria">
+	    <h3 class="panel-title">Maquinaria</h3>
+	        <form class="card form vertical" id="maquinariaForm">
+      <div class="actions-row">
+        <select id="maq_maquina" class="input inline-edit" required>
+          <option value="">Máquina...</option>
+          <option>Máquina 1</option>
+          <option>Máquina 2</option>
+          <option>Máquina 3</option>
+          <option>Máquina 4</option>
+          <option>Máquina 5</option>
+        </select>
+        <select id="maq_servicio" class="input inline-edit" required>
+          <option value="">Servicio...</option>
+          <option value="reparacion">Reparación</option>
+          <option value="mantenimiento">Mantenimiento</option>
+          <option value="averia">Avería</option>
+          <option value="__custom__">Agregar servicio</option>
+        </select>
+	        <input id="maq_servicio_custom" class="input inline-edit" placeholder="Servicio" style="display:none;" />
+        <div class="date-now">
+          <input id="maq_fecha" type="datetime-local" class="input inline-edit" required />
+          <button class="btn-small btn-white now-btn" type="button">Ahora</button>
+        </div>
+      </div>
+      <div class="actions-row">
+        <input id="maq_desc" class="input inline-edit" placeholder="Descripción / estado" />
+        <button class="btn" id="maqSubmit" type="submit">Registrar</button>
+      </div>
+    </form>
+
+    <div class="actions-row mt-sm" style="justify-content:flex-end; gap:8px;">
+	      <button class="btn-small btn-white" type="button" data-export="maquinaria" data-format="xlsx" data-all="1">
+	        <img src="./assets/img/icon_excel.svg" alt="" class="icon-img"> Exportar Excel
+	      </button>
+	      <button class="btn-small btn-white" type="button" data-export="maquinaria" data-format="pdf" data-all="1">
+	        <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img"> Exportar PDF
+	      </button>
+	      <span class="tag" id="count-maquinaria">0</span>
+	    </div>
+
+	    <div class="card mt-lg" data-filter-scope="maquinaria">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="maquinaria" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="maquinaria" aria-label="Hasta">
+        <input class="input input-search" type="text" data-filter-q="maquinaria" placeholder="Buscar...">
+        <select class="input inline-edit select-compact" data-sort-scope="maquinaria" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+        <button class="btn-small btn-white" type="button" data-filter-apply="maquinaria">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="maquinaria">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="maquinaria">Mostrar todo</button>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+	      <table class="table" id="maquinariaTable" data-table="maquinaria">
+	        <thead>
+	          <tr>
+	            <th>Fecha</th>
+	            <th>Máquina</th>
+	            <th>Servicio</th>
+	            <th>Descripción</th>
+            <th>Acciones</th>
+          </tr>
+	        </thead>
+	        <tbody></tbody>
+	      </table>
+	    </div>
+	  </section>
+
+	  <!-- REPUESTOS E INVENTARIO (solo supervisor) -->
+	  <section class="section only-supervisor" id="repuestos">
+	    <h3 class="panel-title">Repuestos e Inventario</h3>
+	        <form class="card form vertical" id="repuestosForm">
+      <div class="actions-row">
+        <select id="rep_repuesto" class="input inline-edit" required>
+          <option value="">Repuesto...</option>
+          <option value="calentador">Calentador</option>
+          <option value="resistencia">Resistencia</option>
+          <option value="rodamiento">Rodamiento</option>
+          <option value="boquilla">Boquilla</option>
+          <option value="__custom__">Agregar repuesto</option>
+        </select>
+	        <input id="rep_repuesto_custom" class="input inline-edit" placeholder="Repuesto" style="display:none;" />
+        <input id="rep_cantidad" type="number" class="input inline-edit" placeholder="Cantidad" min="0" required />
+        <div class="date-now">
+          <input id="rep_fecha" type="date" class="input inline-edit" required />
+          <button class="btn-small btn-white now-btn" type="button">Hoy</button>
+        </div>
+      </div>
+      <div class="actions-row">
+	        <input id="rep_obs" class="input inline-edit" placeholder="Descripción" />
+        <button class="btn" id="repSubmit" type="submit">Registrar</button>
+      </div>
+    </form>
+
+    <div class="actions-row mt-sm" style="justify-content:flex-end; gap:8px;">
+	      <button class="btn-small btn-white" type="button" data-export="repuestos" data-format="xlsx" data-all="1">
+	        <img src="./assets/img/icon_excel.svg" alt="" class="icon-img"> Exportar Excel
+	      </button>
+	      <button class="btn-small btn-white" type="button" data-export="repuestos" data-format="pdf" data-all="1">
+	        <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img"> Exportar PDF
+	      </button>
+	      <span class="tag" id="count-repuestos">0</span>
+	    </div>
+
+	    <div class="card mt-lg" data-filter-scope="repuestos">
+      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
+      <div class="actions-row">
+        <input class="input inline-edit" type="date" data-filter-from="repuestos" aria-label="Desde">
+        <input class="input inline-edit" type="date" data-filter-to="repuestos" aria-label="Hasta">
+        <input class="input input-search" type="text" data-filter-q="repuestos" placeholder="Buscar...">
+        <select class="input inline-edit select-compact" data-sort-scope="repuestos" aria-label="Ordenar">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+        </select>
+        <button class="btn-small btn-white" type="button" data-filter-apply="repuestos">Filtrar</button>
+        <button class="btn-small btn-white" type="button" data-filter-clear="repuestos">Limpiar</button>
+        <button class="btn-small btn-white" type="button" data-filter-all="repuestos">Mostrar todo</button>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+	      <table class="table" id="repuestosTable" data-table="repuestos">
+	        <thead>
+	          <tr>
+	            <th>Fecha</th>
+	            <th>Repuesto</th>
+	            <th>Cantidad</th>
+	            <th>Descripción</th>
+	            <th>Estado</th>
+            <th>Acciones</th>
+          </tr>
+	        </thead>
+	        <tbody></tbody>
+	      </table>
+	    </div>
+	  </section>
+
+  <!-- OPCIONES AVANZADAS (solo supervisor) -->
+  <section class="section only-supervisor" id="advanced">
+    <h3 class="panel-title">Opciones avanzadas</h3>
+
+    <!-- USUARIOS -->
+    <div class="card form vertical mt-sm">
+      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Gestión de Usuarios</h4>
+      <div class="actions-row">
+        <input id="nu_user" class="input inline-edit" placeholder="usuario">
+        <select id="nu_role" class="input inline-edit">
+          <option>operario</option>
+          <option>supervisor</option>
+          <option>administrador</option>
+        </select>
+
+        <input
+          id="nu_pass"
+          class="input inline-edit"
+          type="password"
+          placeholder="contraseña (opcional, por defecto definida por el sistema)"
+          autocomplete="new-password"
+        >
+        <button id="addUser" class="btn-small" type="button">
+          <img src="./assets/img/icon_users.svg" alt="" class="icon-img">
+          <span>Añadir</span>
+        </button>
+      </div>
+      <div class="actions-row" style="justify-content:flex-end; gap:8px; margin-top:10px;">
+        <select class="input inline-edit select-compact" data-sort-scope="users" aria-label="Ordenar usuarios">
+          <option value="alpha_asc">A - Z</option>
+          <option value="alpha_desc">Z - A</option>
+          <option value="date_desc">Creación (reciente)</option>
+          <option value="date_asc">Creación (antigua)</option>
+        </select>
+      </div>
+      <table class="table" id="usersTable">
+        <thead>
+          <tr>
+            <th>Usuario</th>
+            <th>Rol</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- BACKUP / RESTORE -->
+    <div class="card form vertical mt-lg">
+      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Backups y Restauración</h4>
+      <div class="actions-row actions-split">
+        <div class="actions-left">
+          <button id="btnDownloadBackup" class="btn btn-white" type="button">
+            <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
+            <span>Descargar backup (BD)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="actions-row actions-split mt-sm">
+        <div class="actions-left">
+          <input id="backupFile" class="input inline-edit" type="file" accept=".db,application/octet-stream">
+          <button id="btnRestoreBackup" class="btn btn-white" type="button">
+            <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
+            <span>Restaurar backup</span>
+          </button>
+        </div>
+      </div>
+
+      <p class="subtitle mt-sm">
+        La restauración reemplaza la base de datos actual. Se recomienda descargar un backup antes de restaurar.
+      </p>
+      <p id="backupStatus" class="subtitle mt-sm"></p>
+    </div>
+
+    <!-- HISTORIAL DE EVENTOS -->
+    <div class="card form vertical mt-lg">
+      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Historial de Eventos</h4>
+      <div class="actions-row">
+        <input id="ev_q" class="input inline-edit" placeholder="Buscar (usuario, acción, entidad...)">
+        <input id="ev_from" class="input inline-edit" type="date">
+        <input id="ev_to" class="input inline-edit" type="date">
+        <select id="ev_sort" class="input inline-edit select-compact" data-sort-scope="event_logs" aria-label="Ordenar eventos">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">Usuario A - Z</option>
+          <option value="alpha_desc">Usuario Z - A</option>
+        </select>
+        <button id="ev_apply" class="btn-small" type="button">Filtrar</button>
+        <button id="ev_refresh" class="btn-small btn-white" type="button">Actualizar</button>
+        <button id="ev_export_excel" class="btn-small btn-white" type="button">Descargar Excel</button>
+      </div>
+
+      <table class="table table-events" id="eventsTable">
+        <colgroup>
+        <col style="width:16%">
+        <col style="width:9%">
+        <col style="width:10%">
+        <col style="width:12%">
+        <col style="width:10%">
+        <col style="width:6%">
+        <col style="width:27%">
+        <col style="width:10%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Fecha/Hora</th>
+            <th>Usuario</th>
+            <th>Rol</th>
+            <th>Acción</th>
+            <th>Entidad</th>
+            <th>ID</th>
+            <th>Detalle</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <div class="actions-row mt-sm">
+        <button id="ev_prev" class="btn-small btn-white" type="button">Anterior</button>
+        <span id="ev_page" class="tag">1</span>
+        <button id="ev_next" class="btn-small btn-white" type="button">Siguiente</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+
+
+  <!-- MODAL: Historial de entradas (Recepción de Materiales) -->
+  <div class="modal-overlay" id="recepHistModal" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Historial de entradas</div>
+          <div class="modal-subtitle" id="recepHistSub">Material: -</div>
+        </div>
+        <button class="btn-small btn-white" type="button" id="recepHistClose">Cerrar</button>
+      </div>
+
+      <div class="modal-summary">
+        <span class="tag">Actualizaciones: <b id="recepHistTimes">0</b></span>
+        <span class="tag">Total agregado: <b id="recepHistTotal">0</b></span>
+        <span class="tag">Último total: <b id="recepHistLast">0</b></span>
+        <select class="input inline-edit select-compact" data-sort-scope="recep_hist" aria-label="Ordenar historial">
+          <option value="date_desc">Fecha (reciente)</option>
+          <option value="date_asc">Fecha (antigua)</option>
+          <option value="alpha_asc">Acción A - Z</option>
+          <option value="alpha_desc">Acción Z - A</option>
+        </select>
+      </div>
+
+      <div class="modal-body">
+        <table class="table" id="recepHistTable">
+          <thead>
+            <tr>
+              <th class="col-date">Fecha/Hora</th>
+              <th>Acción</th>
+	              <th class="col-num">Cantidad</th>
+              <th class="col-num">Total</th>
+              <th>Fecha registro</th>
+              <th>Unidad</th>
+              <th class="col-etiqueta">Etiqueta</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="subtitle mt-sm" id="recepHistEmpty" style="display:none;">No hay historial registrado para este material.</p>
+      </div>
+    </div>
+  </div>
+
+
+<script src="./assets/js/app.js?v=19"></script>
+</body>
+</html>
