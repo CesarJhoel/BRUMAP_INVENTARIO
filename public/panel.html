@@ -20,8 +20,8 @@
       <span class="top-brand">BRUMAP</span>
     </div>
 
-    <!-- CENTRO: exportaciones completas -->
-    <div class="top-center">
+    <!-- CENTRO: accesos globales (compacto en versión UI PRO) -->
+    <div class="top-center top-center-pro">
       <button class="btn-small btn-white export-full" type="button" data-export="registros" data-format="pdf" data-all="1" id="pdfAllRegistros">
         <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
         <span>PDF Registros Completos</span>
@@ -51,7 +51,12 @@
 <!-- MENÚ LATERAL -->
 <aside class="sidebar" id="sidebar">
   <nav class="menu">
-    <a class="menu-item active" href="#recepciones">
+    <a class="menu-item active" href="#dashboard">
+      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
+      <span>Dashboard</span>
+    </a>
+
+    <a class="menu-item" href="#recepciones">
       <img src="./assets/img/icon_recepciones.svg" alt="" class="icon-img">
       <span>Recepción de Materiales</span>
     </a>
@@ -86,6 +91,12 @@
 	      <span>Repuestos e Inventario</span>
 	    </a>
 
+
+    <a class="menu-item only-supervisor" href="#almacen-pro">
+      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
+      <span>Almacén Pro</span>
+    </a>
+
     <a class="menu-item only-supervisor" href="#advanced">
       <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
       <span>Opciones avanzadas</span>
@@ -99,6 +110,65 @@
 
 <!-- CONTENIDO PRINCIPAL -->
 <main class="workspace">
+
+  <!-- DASHBOARD UI PRO -->
+  <section class="section dashboard-section" id="dashboard">
+    <div class="page-hero card">
+      <div>
+        <span class="eyebrow">Panel general</span>
+        <h2>Control operativo BRUMAP</h2>
+        <p>Vista rápida para supervisar recepción, stock, producción y envíos sin perder acceso a los módulos existentes.</p>
+      </div>
+      <div class="hero-actions">
+        <button class="btn btn-primary" type="button" data-go="#recepciones">Nueva recepción</button>
+        <button class="btn btn-white" type="button" data-go="#stock">Ver stock</button>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <article class="kpi-card card">
+        <span>Recepciones</span>
+        <strong id="kpiRecepciones">0</strong>
+        <small>Registros cargados</small>
+      </article>
+      <article class="kpi-card card">
+        <span>Stock</span>
+        <strong id="kpiStock">0</strong>
+        <small>Materiales en inventario</small>
+      </article>
+      <article class="kpi-card card">
+        <span>Producción</span>
+        <strong id="kpiProduccion">0</strong>
+        <small>Órdenes registradas</small>
+      </article>
+      <article class="kpi-card card">
+        <span>Envíos</span>
+        <strong id="kpiEnvios">0</strong>
+        <small>Salidas registradas</small>
+      </article>
+    </div>
+
+    <div class="dashboard-grid">
+      <div class="card quick-card">
+        <h3>Accesos rápidos</h3>
+        <div class="quick-actions">
+          <button class="btn-small btn-white" type="button" data-go="#recepciones">Recepción</button>
+          <button class="btn-small btn-white" type="button" data-go="#stock">Stock</button>
+          <button class="btn-small btn-white" type="button" data-go="#produccion">Producción</button>
+          <button class="btn-small btn-white" type="button" data-go="#envios">Envíos</button>
+          <button class="btn-small btn-white only-supervisor" type="button" data-go="#advanced">Opciones avanzadas</button>
+        </div>
+      </div>
+      <div class="card quick-card">
+        <h3>Exportaciones completas</h3>
+        <p class="subtitle">Se mantienen los mismos botones originales de exportación; solo se reubican visualmente para no saturar la barra superior.</p>
+        <div class="quick-actions dashboard-exports">
+          <button class="btn-small btn-white" type="button" data-export="registros" data-format="pdf" data-all="1">PDF completo</button>
+          <button class="btn-small btn-white" type="button" data-export="registros" data-format="xlsx" data-all="1">Excel completo</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- RECEPCIÓN -->
   <section class="section" id="recepciones">
@@ -744,6 +814,121 @@
 	  </section>
 
   <!-- OPCIONES AVANZADAS (solo supervisor) -->
+
+
+  <!-- ALMACÉN PRO: trazabilidad, códigos de barra, kardex y producción -->
+  <section class="section only-supervisor" id="almacen-pro">
+    <div class="section-heading">
+      <div>
+        <h3 class="panel-title">Almacén Pro y Trazabilidad</h3>
+        <p class="subtitle">Control de materiales por código de barra, stock mínimo/crítico, proveedores, clientes, kardex, conteo físico, productos terminados y órdenes de producción.</p>
+      </div>
+    </div>
+
+    <div class="pro-kpi-grid mt-lg">
+      <div class="pro-kpi card"><span>Materiales</span><strong id="proKpiMateriales">0</strong></div>
+      <div class="pro-kpi card"><span>Stock crítico</span><strong id="proKpiCritico">0</strong></div>
+      <div class="pro-kpi card"><span>Stock bajo</span><strong id="proKpiBajo">0</strong></div>
+      <div class="pro-kpi card"><span>Órdenes abiertas</span><strong id="proKpiOP">0</strong></div>
+    </div>
+
+    <div class="card mt-lg barcode-console">
+      <h4 class="pro-title">Escaneo rápido con lectora / pistola de código de barras</h4>
+      <p class="subtitle">La lectora funciona como teclado: enfoca este campo, escanea la etiqueta y presiona Enter automáticamente. También puedes escribir el código manualmente.</p>
+      <div class="pro-form-grid">
+        <input class="input barcode-input" id="proScanCode" placeholder="Escanear o escribir código de barra">
+        <select class="input" id="proScanAccion">
+          <option value="entrada">Entrada / recepción</option>
+          <option value="salida">Salida / consumo</option>
+          <option value="ajuste">Ajuste directo</option>
+        </select>
+        <input class="input" id="proScanCantidad" type="number" min="1" value="1" placeholder="Cantidad">
+        <input class="input" id="proScanObs" placeholder="Observación / referencia">
+        <button class="btn btn-primary" type="button" id="proBtnMovimiento">Registrar movimiento</button>
+      </div>
+      <p class="subtitle mt-sm" id="proScanStatus"></p>
+    </div>
+
+    <div class="pro-tabs mt-lg">
+      <button class="btn-small pro-tab active" type="button" data-pro-tab="materiales">Materiales</button>
+      <button class="btn-small pro-tab" type="button" data-pro-tab="kardex">Kardex</button>
+      <button class="btn-small pro-tab" type="button" data-pro-tab="conteo">Conteo físico</button>
+      <button class="btn-small pro-tab" type="button" data-pro-tab="proveedores">Proveedores</button>
+      <button class="btn-small pro-tab" type="button" data-pro-tab="clientes">Clientes</button>
+      <button class="btn-small pro-tab" type="button" data-pro-tab="terminados">Productos terminados</button>
+      <button class="btn-small pro-tab" type="button" data-pro-tab="ordenes">Órdenes producción</button>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="materiales">
+      <div class="card mt-lg">
+        <h4 class="pro-title">Catálogo de materiales trazables</h4>
+        <form class="pro-form-grid" id="proMaterialForm">
+          <input type="hidden" name="id">
+          <input class="input" name="codigo_barra" placeholder="Código de barra / etiqueta">
+          <input class="input" name="tipo" placeholder="Nombre del material" required>
+          <input class="input" name="categoria" placeholder="Categoría">
+          <input class="input" name="etiqueta" placeholder="Etiqueta / lote">
+          <input class="input" name="unidad" placeholder="Unidad: kg, m, und, caja">
+          <input class="input" name="ubicacion" placeholder="Ubicación: almacén, rack, zona">
+          <input class="input" name="stock_inicial" type="number" min="0" placeholder="Stock inicial">
+          <input class="input" name="stock_min" type="number" min="0" placeholder="Stock mínimo">
+          <input class="input" name="stock_crit" type="number" min="0" placeholder="Stock crítico">
+          <input class="input" name="costo_unitario" type="number" min="0" step="0.01" placeholder="Costo unitario S/">
+          <select class="input" name="proveedor_id" id="proMaterialProveedor"><option value="">Proveedor</option></select>
+          <button class="btn btn-primary" type="submit">Guardar material</button>
+        </form>
+      </div>
+      <div class="card mt-lg">
+        <div class="actions-row"><input class="input input-search" id="proMaterialSearch" placeholder="Buscar material, código, categoría o ubicación"><button class="btn-small btn-white" id="proRefreshMateriales" type="button">Actualizar</button></div>
+        <div class="table-scroll"><table class="table pro-table" id="proMaterialTable"><thead><tr><th>Código</th><th>Material</th><th>Stock</th><th>Estado</th><th>Unidad</th><th>Ubicación</th><th>Proveedor</th><th>Acción</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="kardex" style="display:none;">
+      <div class="card mt-lg">
+        <h4 class="pro-title">Kardex por material / código</h4>
+        <div class="actions-row"><input class="input input-search" id="proKardexSearch" placeholder="Buscar por código, material o referencia"><button class="btn-small btn-white" id="proRefreshKardex" type="button">Actualizar</button></div>
+        <div class="table-scroll"><table class="table pro-table" id="proKardexTable"><thead><tr><th>Fecha</th><th>Código</th><th>Material</th><th>Movimiento</th><th>Entrada</th><th>Salida</th><th>Saldo</th><th>Usuario</th><th>Obs.</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="conteo" style="display:none;">
+      <div class="card mt-lg">
+        <h4 class="pro-title">Recuento físico con código de barra</h4>
+        <form class="pro-form-grid" id="proConteoForm">
+          <input class="input barcode-input" name="codigo_barra" placeholder="Escanear código de barra">
+          <input class="input" name="tipo" placeholder="Material si no tiene código">
+          <input class="input" name="stock_fisico" type="number" min="0" placeholder="Stock físico contado" required>
+          <input class="input" name="motivo" placeholder="Motivo / observación">
+          <label class="tag"><input type="checkbox" name="aplicar_ajuste" value="1"> Aplicar ajuste al stock</label>
+          <button class="btn btn-primary" type="submit">Guardar conteo</button>
+        </form>
+        <p class="subtitle mt-sm" id="proConteoStatus"></p>
+      </div>
+      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proConteoTable"><thead><tr><th>Fecha</th><th>Código</th><th>Material</th><th>Sistema</th><th>Físico</th><th>Diferencia</th><th>Usuario</th><th>Motivo</th></tr></thead><tbody></tbody></table></div></div>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="proveedores" style="display:none;">
+      <div class="card mt-lg"><h4 class="pro-title">Proveedores</h4><form class="pro-form-grid" id="proProveedorForm"><input type="hidden" name="id"><input class="input" name="nombre" placeholder="Proveedor" required><input class="input" name="ruc" placeholder="RUC"><input class="input" name="telefono" placeholder="Teléfono"><input class="input" name="correo" placeholder="Correo"><input class="input" name="contacto" placeholder="Contacto"><input class="input" name="observaciones" placeholder="Observaciones"><button class="btn btn-primary" type="submit">Guardar proveedor</button></form></div>
+      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proProveedorTable"><thead><tr><th>Proveedor</th><th>RUC</th><th>Teléfono</th><th>Contacto</th><th>Correo</th></tr></thead><tbody></tbody></table></div></div>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="clientes" style="display:none;">
+      <div class="card mt-lg"><h4 class="pro-title">Clientes para envíos</h4><form class="pro-form-grid" id="proClienteForm"><input type="hidden" name="id"><input class="input" name="nombre" placeholder="Cliente" required><input class="input" name="documento" placeholder="RUC/DNI"><input class="input" name="telefono" placeholder="Teléfono"><input class="input" name="correo" placeholder="Correo"><input class="input" name="direccion" placeholder="Dirección"><input class="input" name="contacto" placeholder="Contacto"><input class="input" name="observaciones" placeholder="Observaciones"><button class="btn btn-primary" type="submit">Guardar cliente</button></form></div>
+      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proClienteTable"><thead><tr><th>Cliente</th><th>Documento</th><th>Teléfono</th><th>Contacto</th><th>Dirección</th></tr></thead><tbody></tbody></table></div></div>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="terminados" style="display:none;">
+      <div class="card mt-lg"><h4 class="pro-title">Productos terminados</h4><form class="pro-form-grid" id="proTerminadoForm"><input type="hidden" name="id"><input class="input" name="codigo_barra" placeholder="Código de barra"><input class="input" name="producto" placeholder="Producto terminado" required><input class="input" name="descripcion" placeholder="Descripción"><input class="input" name="unidad" placeholder="Unidad"><input class="input" name="stock" type="number" min="0" placeholder="Stock"><input class="input" name="stock_min" type="number" min="0" placeholder="Stock mínimo"><select class="input" name="cliente_id" id="proTerminadoCliente"><option value="">Cliente relacionado</option></select><button class="btn btn-primary" type="submit">Guardar producto</button></form></div>
+      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proTerminadoTable"><thead><tr><th>Código</th><th>Producto</th><th>Stock</th><th>Unidad</th><th>Cliente</th><th>Descripción</th></tr></thead><tbody></tbody></table></div></div>
+    </div>
+
+    <div class="pro-panel" data-pro-panel="ordenes" style="display:none;">
+      <div class="card mt-lg"><h4 class="pro-title">Órdenes de producción</h4><form class="pro-form-grid" id="proOrdenForm"><input type="hidden" name="id"><input class="input" name="codigo" placeholder="Código OP automático si se deja vacío"><input class="input" name="producto" placeholder="Producto a fabricar" required><input class="input" name="cantidad_planificada" type="number" min="0" placeholder="Cantidad planificada"><input class="input" name="cantidad_producida" type="number" min="0" placeholder="Cantidad producida"><select class="input" name="estado"><option>Pendiente</option><option>En proceso</option><option>Finalizada</option><option>Cancelada</option></select><input class="input" name="responsable" placeholder="Responsable"><input class="input" name="fecha" type="datetime-local"><input class="input" name="observacion" placeholder="Observación"><button class="btn btn-primary" type="submit">Guardar orden</button></form></div>
+      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proOrdenTable"><thead><tr><th>Código</th><th>Producto</th><th>Plan</th><th>Producido</th><th>Estado</th><th>Responsable</th><th>Fecha</th></tr></thead><tbody></tbody></table></div></div>
+    </div>
+  </section>
+
   <section class="section only-supervisor" id="advanced">
     <h3 class="panel-title">Opciones avanzadas</h3>
 
@@ -917,6 +1102,6 @@
   </div>
 
 
-<script src="./assets/js/app.js?v=19"></script>
+<script src="./assets/js/app.js?v=30"></script>
 </body>
 </html>

@@ -2563,3 +2563,192 @@ body.role-supervisor .tag.only-supervisor{ display:inline-flex; }
 
 .stock-toolbar .tag{ margin-left:auto; }
 @media (max-width:920px){ .stock-toolbar .tag{ margin-left:0; } }
+
+/* ==========================================================
+   UI PRO BRUMAP - capa compatible no invasiva
+   Objetivo: dashboard inicial, header limpio, sidebar estable
+   y experiencia usable en tablet/celular sin tocar backend.
+   ========================================================== */
+:root{
+  --sidebar-w: 292px;
+  --topbar-h: 64px;
+  --pro-bg-soft: rgba(255,255,255,.045);
+  --pro-line: rgba(255,255,255,.09);
+}
+body{ overflow-x:hidden; }
+.topbar{ min-height:var(--topbar-h); }
+.topbar-inner{ min-height:var(--topbar-h); }
+.top-center-pro{ display:none !important; }
+.top-left{ min-width:0; }
+.top-brand{ letter-spacing:.04em; }
+.top-right{ gap:8px; margin-left:auto; }
+.sidebar{
+  width:var(--sidebar-w) !important;
+  padding:18px 14px !important;
+  overflow-y:auto;
+  overflow-x:hidden;
+}
+.menu{ gap:7px !important; }
+.menu-item{
+  min-height:42px !important;
+  padding:10px 12px !important;
+  border-radius:12px !important;
+  white-space:normal !important;
+  line-height:1.15;
+}
+.menu-item::before{ display:none; }
+.menu-item span{ white-space:normal !important; }
+.menu-item.active{ box-shadow:inset 3px 0 0 var(--accent); }
+.workspace{
+  margin-left:var(--sidebar-w) !important;
+  max-width:none !important;
+  width:auto;
+  padding:24px clamp(16px,2vw,30px) 40px !important;
+}
+.section{
+  max-width:1280px !important;
+  width:100%;
+}
+.page-hero{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  padding:22px !important;
+  background:
+    radial-gradient(circle at top left, rgba(255,140,26,.24), transparent 34%),
+    var(--card) !important;
+}
+.eyebrow{
+  display:inline-flex;
+  padding:5px 10px;
+  border-radius:999px;
+  background:rgba(255,140,26,.14);
+  color:var(--accent-2);
+  border:1px solid rgba(255,140,26,.28);
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.page-hero h2{
+  margin:10px 0 6px;
+  font-size:clamp(22px,3vw,36px);
+  line-height:1.05;
+}
+.page-hero p{ margin:0; color:var(--muted); max-width:720px; }
+.hero-actions{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+.btn-white{ background:var(--card-2) !important; color:var(--text) !important; border:1px solid var(--stroke) !important; }
+.kpi-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px;
+  margin:16px 0;
+}
+.kpi-card{ padding:18px !important; }
+.kpi-card span{ display:block; color:var(--muted); font-size:13px; font-weight:700; }
+.kpi-card strong{ display:block; margin:8px 0 2px; font-size:34px; line-height:1; color:var(--accent-2); }
+.kpi-card small{ color:var(--muted); }
+.dashboard-grid{
+  display:grid;
+  grid-template-columns:1.1fr .9fr;
+  gap:16px;
+}
+.quick-card h3{ margin:0 0 10px; }
+.quick-actions{ display:flex; flex-wrap:wrap; gap:10px; }
+.dashboard-exports .btn-small{ min-width:130px; justify-content:center; }
+.card{ overflow:hidden; }
+.form.two-col{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.col-span{ grid-column:1 / -1; }
+.actions-row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.actions-split{ justify-content:space-between; }
+.actions-left,.actions-right{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.table{
+  min-width:720px;
+}
+.card:has(.table){ overflow-x:auto; }
+.input, select.input, textarea.input{ min-height:42px; }
+.panel-title{
+  border-width:1px !important;
+  border-radius:12px !important;
+  padding:8px 12px !important;
+}
+.pager{ gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+.pager-btn{ border:1px solid var(--stroke); background:var(--card-2); color:var(--text); border-radius:9px; padding:8px 10px; }
+body.theme-light .page-hero{
+  background:radial-gradient(circle at top left, rgba(255,140,26,.18), transparent 34%), #fff !important;
+}
+body.theme-light .eyebrow{ color:#9a4b00; }
+@media (max-width:1100px){
+  .kpi-grid{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .dashboard-grid{ grid-template-columns:1fr; }
+}
+@media (max-width:920px){
+  :root{ --topbar-h:64px; }
+  .topbar-inner{ flex-wrap:nowrap !important; }
+  .top-logo{ width:34px; }
+  .top-brand{ font-size:14px; }
+  .top-right .btn-small span{ display:none; }
+  .workspace{
+    margin-left:0 !important;
+    padding:16px 12px 32px !important;
+    margin-top:calc(var(--topbar-h) + 10px) !important;
+  }
+  .sidebar{
+    position:fixed !important;
+    inset:var(--topbar-h) auto 0 0 !important;
+    width:min(86vw,330px) !important;
+    height:calc(100dvh - var(--topbar-h)) !important;
+    margin-top:0 !important;
+    z-index:49 !important;
+    transform:translateX(-105%);
+    transition:transform .2s ease;
+    box-shadow:20px 0 45px rgba(0,0,0,.38);
+  }
+  body.sidebar-open .sidebar{ transform:translateX(0); }
+  body.sidebar-open .sidebar-overlay{ display:block !important; }
+  .menu{ flex-direction:column !important; flex-wrap:nowrap !important; }
+  .mobile-menu-btn{ display:inline-flex !important; }
+  .page-hero{ align-items:flex-start; flex-direction:column; }
+  .hero-actions{ justify-content:flex-start; width:100%; }
+  .hero-actions .btn{ flex:1 1 160px; }
+  .form.two-col{ grid-template-columns:1fr; }
+  .input-qty,.input-date,.input-datetime,.input-unit,.inline-edit,.select-compact{ width:100% !important; max-width:none !important; }
+  .actions-split,.actions-left,.actions-right{ width:100%; align-items:stretch; }
+  .actions-row .btn,.actions-row .btn-small{ justify-content:center; }
+}
+@media (max-width:560px){
+  .kpi-grid{ grid-template-columns:1fr; }
+  .page-hero{ padding:18px !important; }
+  .kpi-card strong{ font-size:30px; }
+  .top-right{ gap:6px; }
+  .btn-small{ min-height:36px; }
+}
+
+/* =============================================================================
+   MÓDULO PRO: almacén, códigos de barra y trazabilidad
+   ============================================================================= */
+.section-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:8px}
+.pro-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px}
+.pro-kpi{padding:14px 16px;box-shadow:none}
+.pro-kpi span{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
+.pro-kpi strong{font-size:28px;line-height:1;color:var(--accent)}
+.pro-title{margin:0 0 12px;font-size:16px;color:var(--text)}
+.pro-form-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px;align-items:center}
+.pro-form-grid .btn{min-height:42px}
+.barcode-console{border-color:rgba(255,140,26,.45)}
+.barcode-input{font-size:18px;font-weight:700;letter-spacing:.04em;border-color:var(--accent)!important}
+.pro-tabs{display:flex;flex-wrap:wrap;gap:8px;position:sticky;top:calc(var(--topbar-h) + 6px);z-index:20;background:var(--bg);padding:8px 0}
+.pro-tab.active{border-color:var(--accent);background:rgba(255,140,26,.18);color:var(--text)}
+.table-scroll{width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
+.pro-table{min-width:860px}
+.pro-table code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-weight:700}
+.stock-pill{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;border:1px solid var(--stroke);font-weight:800;font-size:12px}
+.stock-ok{background:rgba(34,197,94,.14);color:#86efac;border-color:rgba(34,197,94,.35)}
+.stock-bajo{background:rgba(234,179,8,.14);color:#fde68a;border-color:rgba(234,179,8,.35)}
+.stock-critico{background:rgba(239,68,68,.16);color:#fecaca;border-color:rgba(239,68,68,.42)}
+body.theme-light .stock-ok{color:#166534;background:#dcfce7;border-color:#86efac}
+body.theme-light .stock-bajo{color:#854d0e;background:#fef3c7;border-color:#facc15}
+body.theme-light .stock-critico{color:#991b1b;background:#fee2e2;border-color:#fca5a5}
+@media (max-width:1100px){.pro-form-grid{grid-template-columns:repeat(2,minmax(150px,1fr))}.pro-kpi-grid{grid-template-columns:repeat(2,minmax(140px,1fr))}}
+@media (max-width:640px){.pro-form-grid{grid-template-columns:1fr}.pro-kpi-grid{grid-template-columns:1fr}.pro-tabs{position:static}.barcode-input{font-size:16px}.section-heading{display:block}}

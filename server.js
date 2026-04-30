@@ -30,6 +30,19 @@ const USE_SECURE_COOKIES = COOKIE_SECURE_ENV && IS_PROD;
 const PROTECTED_SUPERVISOR_USERNAME = String(process.env.PROTECTED_SUPERVISOR_USERNAME || 'supervisor').toLowerCase();
 const PROTECTED_SUPERVISOR_PASSWORD = String(process.env.PROTECTED_SUPERVISOR_PASSWORD || 'Admin');
 
+// Auditoría optimizada para VPS:
+// - normal: guarda eventos administrativos y cambios relevantes, pero evita duplicar escaneos de stock que ya viven en Kardex.
+// - verbose: guarda todo.
+// - minimal: solo seguridad, usuarios, backups y eliminaciones.
+// - AUDIT_ENABLED=0 desactiva event_logs sin afectar Kardex ni movimientos operativos.
+const AUDIT_ENABLED = process.env.AUDIT_ENABLED !== '0';
+const AUDIT_LEVEL = String(process.env.AUDIT_LEVEL || 'normal').toLowerCase();
+const AUDIT_RETENTION_DAYS = Math.max(1, parseInt(process.env.AUDIT_RETENTION_DAYS || '120', 10) || 120);
+const AUDIT_MAX_ROWS = Math.max(500, parseInt(process.env.AUDIT_MAX_ROWS || '15000', 10) || 15000);
+const AUDIT_DETAIL_MAX_CHARS = Math.max(80, parseInt(process.env.AUDIT_DETAIL_MAX_CHARS || '350', 10) || 350);
+const AUDIT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.AUDIT_CLEANUP_INTERVAL_MS || '3600000', 10) || 3600000);
+let lastAuditCleanupAt = 0;
+
 // Si usamos cookies seguras detrás de un proxy (nginx, etc.), hay que confiar en el proxy
 if (USE_SECURE_COOKIES) {
   app.set('trust proxy', 1);
@@ -63,6 +76,15 @@ let db = await open({
   filename: DB_FILE,
   driver: sqlite3.Database
 });
+
+// Ajustes SQLite para VPS: mejor concurrencia de lecturas/escrituras y menor bloqueo.
+await db.exec(`
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
+PRAGMA temp_store = MEMORY;
+`);
 
 // -----------------------------------------------------------------------------
 // Esquema base (para instalaciones nuevas)
@@ -158,6 +180,7 @@ CREATE TABLE IF NOT EXISTS event_logs(
 );
 CREATE INDEX IF NOT EXISTS idx_event_logs_ts ON event_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_event_logs_user ON event_logs(username);
+CREATE INDEX IF NOT EXISTS idx_event_logs_action_entity ON event_logs(action, entity);
 
 CREATE TABLE IF NOT EXISTS maquinaria_logs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,6 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_recepciones_mov_tipo ON recepciones_movimientos(t
 `;
 
 await db.exec(BASE_SCHEMA_SQL);
+await cleanupAuditLogs(true);
 
 // -----------------------------------------------------------------------------
 // Migraciones simples: añadir columnas si faltan (para BD viejas)
@@ -327,28 +351,98 @@ async function seedRecepcionesMovimientosIfEmpty() {
 
 
 // -----------------------------------------------------------------------------
-// Auditoría de eventos (event_logs)
+// Auditoría de eventos (event_logs) optimizada
 // -----------------------------------------------------------------------------
 function escapeSqliteString(val) {
   return String(val || '').replace(/'/g, "''");
 }
 
+function compactAuditDetail(detail) {
+  if (detail == null) return null;
+  let text = typeof detail === 'string' ? detail : JSON.stringify(detail);
+  text = text.replace(/\s+/g, ' ').trim();
+  if (text.length > AUDIT_DETAIL_MAX_CHARS) text = text.slice(0, AUDIT_DETAIL_MAX_CHARS) + '…';
+  return text || null;
+}
+
+function shouldLogEvent({ action = '', entity = '' } = {}) {
+  if (!AUDIT_ENABLED) return false;
+  const a = String(action || '').toLowerCase();
+  const e = String(entity || '').toLowerCase();
+
+  if (AUDIT_LEVEL === 'verbose') return true;
+
+  const securityOrAdmin =
+    e === 'auth' || e === 'database' || e === 'users' ||
+    a.includes('login') || a.includes('logout') || a.includes('backup') ||
+    a.includes('restore') || a.includes('password') || a === 'delete';
+
+  if (AUDIT_LEVEL === 'minimal') return securityOrAdmin;
+
+  // En modo normal evitamos duplicar movimientos de alta frecuencia.
+  // Entradas/salidas/conteos por escáner ya quedan en pro_kardex/pro_conteos_inventario.
+  const highVolumeOperationalEvent =
+    e === 'stock' || e === 'pro_conteo' ||
+    a === 'pro_entrada' || a === 'pro_salida' || a === 'conteo';
+
+  return !highVolumeOperationalEvent;
+}
+
+async function cleanupAuditLogs(force = false) {
+  if (!force && Date.now() - lastAuditCleanupAt < AUDIT_CLEANUP_INTERVAL_MS) return;
+  lastAuditCleanupAt = Date.now();
+
+  try {
+    await db.run(
+      "DELETE FROM event_logs WHERE datetime(ts) < datetime('now', ?)",
+      [`-${AUDIT_RETENTION_DAYS} days`]
+    );
+
+    const row = await db.get('SELECT COUNT(*) AS c FROM event_logs');
+    const excess = Math.max(0, (row?.c || 0) - AUDIT_MAX_ROWS);
+    if (excess > 0) {
+      await db.run(
+        `DELETE FROM event_logs
+         WHERE id IN (SELECT id FROM event_logs ORDER BY ts ASC, id ASC LIMIT ?)`,
+        [excess]
+      );
+    }
+  } catch (_) {
+    // La limpieza de auditoría no debe bloquear la operación del sistema.
+  }
+}
+
 async function logEvent(req, { action, entity = null, entityId = null, detail = null } = {}) {
   try {
+    if (!shouldLogEvent({ action, entity })) return;
+
     const u = req?.session?.user || null;
     const username = u ? u.username : null;
     const role = u ? u.role : null;
     const ipRaw = req?.headers?.['x-forwarded-for'] || req?.socket?.remoteAddress || '';
-    const ip = String(ipRaw).split(',')[0].trim();
+    const ip = String(ipRaw).split(',')[0].trim().slice(0, 80);
 
     await db.run(
       "INSERT INTO event_logs(username,role,action,entity,entity_id,detail,ip) VALUES(?,?,?,?,?,?,?)",
-      [username, role, String(action || ''), entity ? String(entity) : null, entityId ? String(entityId) : null, detail ? String(detail) : null, ip]
+      [
+        username,
+        role,
+        String(action || '').slice(0, 80),
+        entity ? String(entity).slice(0, 80) : null,
+        entityId ? String(entityId).slice(0, 120) : null,
+        compactAuditDetail(detail),
+        ip
+      ]
     );
-  } catch (e) {
-    // No interrumpir el flujo por fallos de auditoría
+
+    cleanupAuditLogs(false);
+  } catch (_) {
+    // No interrumpir el flujo por fallos de auditoría.
   }
 }
+
+const auditCleanupTimer = setInterval(() => cleanupAuditLogs(false), AUDIT_CLEANUP_INTERVAL_MS);
+if (typeof auditCleanupTimer.unref === 'function') auditCleanupTimer.unref();
 
 // -----------------------------------------------------------------------------
 // Backups / Restore de la base de datos (solo supervisor)
@@ -828,7 +922,7 @@ app.post('/api/backup/restore', requireRole('supervisor'), async (req, res) => {
 // -----------------------------------------------------------------------------
 app.get('/api/event-logs', requireRole('supervisor'), async (req, res) => {
   const { from, to, q, limit, offset } = req.query || {};
-  const lim = Math.min(parseInt(limit || '50', 10) || 50, 200);
+  const lim = Math.min(parseInt(limit || '50', 10) || 50, 100);
   const off = Math.max(parseInt(offset || '0', 10) || 0, 0);
 
   const f = buildDateWhere({ field: 'ts', from, to });
@@ -840,9 +934,17 @@ app.get('/api/event-logs', requireRole('supervisor'), async (req, res) => {
     `SELECT * FROM event_logs ${mw.where} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`,
     [...mw.params, lim, off]
   );
-  res.json({ items, total: totalRow?.c || 0 });
+  res.json({ items, total: totalRow?.c || 0, retention_days: AUDIT_RETENTION_DAYS, max_rows: AUDIT_MAX_ROWS, audit_level: AUDIT_LEVEL });
+});
 
 // Exportación del historial (event_logs) a Excel (XLSX)
+app.post('/api/event-logs/cleanup', requireRole('supervisor'), async (req, res) => {
+  await cleanupAuditLogs(true);
+  const row = await db.get('SELECT COUNT(*) AS c FROM event_logs');
+  await logEvent(req, { action: 'audit_cleanup', entity: 'event_logs', detail: `rows=${row?.c || 0}` });
+  res.json({ ok: true, rows: row?.c || 0, retention_days: AUDIT_RETENTION_DAYS, max_rows: AUDIT_MAX_ROWS });
+});
+
 app.get('/api/event-logs.xlsx', requireRole('supervisor'), async (req, res) => {
   const { from, to, q } = req.query || {};
 
@@ -851,7 +953,7 @@ app.get('/api/event-logs.xlsx', requireRole('supervisor'), async (req, res) => {
   const mw = mergeWhere(f.where, f.params, [sQ.clause], [...sQ.params]);
 
   const items = await db.all(
-    `SELECT * FROM event_logs ${mw.where} ORDER BY ts DESC, id DESC`,
+    `SELECT * FROM event_logs ${mw.where} ORDER BY ts DESC, id DESC LIMIT 5000`,
     mw.params
   );
 
@@ -874,8 +976,6 @@ app.get('/api/event-logs.xlsx', requireRole('supervisor'), async (req, res) => {
   sendXlsx(res, `historial_eventos_${stamp}.xlsx`, [
     { name: 'Historial', aoa }
   ]);
-});
-
 });
 
 // -----------------------------------------------------------------------------
@@ -2422,6 +2522,339 @@ app.patch('/api/users/:id/password', requireRole('supervisor'), async (req, res)
   await db.run("UPDATE users SET password=? WHERE id=?", [hp, id]);
   await logEvent(req, { action: 'update_password', entity: 'users', entityId: id });
   res.json({ ok: true });
+});
+
+
+// -----------------------------------------------------------------------------
+// Módulo PRO: almacén, trazabilidad, códigos de barra y gestión operativa
+// -----------------------------------------------------------------------------
+await db.exec(`
+CREATE TABLE IF NOT EXISTS pro_proveedores(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL,
+  ruc TEXT,
+  telefono TEXT,
+  correo TEXT,
+  contacto TEXT,
+  observaciones TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS pro_clientes(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL,
+  documento TEXT,
+  telefono TEXT,
+  correo TEXT,
+  direccion TEXT,
+  contacto TEXT,
+  observaciones TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS pro_materiales(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo_barra TEXT UNIQUE,
+  tipo TEXT UNIQUE NOT NULL,
+  categoria TEXT,
+  etiqueta TEXT,
+  unidad TEXT,
+  ubicacion TEXT,
+  stock_min INTEGER NOT NULL DEFAULT 0,
+  stock_crit INTEGER NOT NULL DEFAULT 0,
+  costo_unitario REAL NOT NULL DEFAULT 0,
+  proveedor_id INTEGER,
+  activo INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pro_materiales_barcode ON pro_materiales(codigo_barra);
+CREATE INDEX IF NOT EXISTS idx_pro_materiales_tipo ON pro_materiales(tipo);
+CREATE TABLE IF NOT EXISTS pro_kardex(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo_barra TEXT,
+  tipo TEXT NOT NULL,
+  movimiento TEXT NOT NULL,
+  entrada INTEGER NOT NULL DEFAULT 0,
+  salida INTEGER NOT NULL DEFAULT 0,
+  saldo INTEGER NOT NULL DEFAULT 0,
+  unidad TEXT,
+  referencia TEXT,
+  observacion TEXT,
+  username TEXT,
+  fecha TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pro_kardex_tipo ON pro_kardex(tipo);
+CREATE INDEX IF NOT EXISTS idx_pro_kardex_barcode ON pro_kardex(codigo_barra);
+CREATE TABLE IF NOT EXISTS pro_productos_terminados(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo_barra TEXT UNIQUE,
+  producto TEXT UNIQUE NOT NULL,
+  descripcion TEXT,
+  unidad TEXT,
+  stock INTEGER NOT NULL DEFAULT 0,
+  stock_min INTEGER NOT NULL DEFAULT 0,
+  cliente_id INTEGER,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS pro_recetas(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  producto_id INTEGER NOT NULL,
+  material_tipo TEXT NOT NULL,
+  cantidad_por_unidad REAL NOT NULL DEFAULT 1,
+  unidad TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS pro_ordenes_produccion(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo TEXT UNIQUE,
+  producto TEXT NOT NULL,
+  cantidad_planificada INTEGER NOT NULL DEFAULT 0,
+  cantidad_producida INTEGER NOT NULL DEFAULT 0,
+  estado TEXT NOT NULL DEFAULT 'Pendiente',
+  responsable TEXT,
+  observacion TEXT,
+  fecha TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS pro_conteos_inventario(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codigo_barra TEXT,
+  tipo TEXT NOT NULL,
+  stock_sistema INTEGER NOT NULL DEFAULT 0,
+  stock_fisico INTEGER NOT NULL DEFAULT 0,
+  diferencia INTEGER NOT NULL DEFAULT 0,
+  motivo TEXT,
+  fecha TEXT NOT NULL,
+  username TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
+function safeText(v, max=255){ return String(v ?? '').trim().slice(0,max); }
+function safeInt(v, def=0){ const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : def; }
+function safeFloat(v, def=0){ const n = Number(v); return Number.isFinite(n) ? n : def; }
+function nowLocalISO(){ return new Date().toISOString().slice(0,16); }
+async function getStockForTipo(tipo){
+  const row = await db.get("SELECT cantidad FROM stock_productos WHERE LOWER(tipo)=LOWER(?) LIMIT 1", [tipo]);
+  return safeInt(row?.cantidad, 0);
+}
+async function recordKardex(req, { codigo_barra='', tipo, movimiento, entrada=0, salida=0, unidad='', referencia='', observacion='', fecha='' }){
+  const saldo = await getStockForTipo(tipo);
+  await db.run(
+    `INSERT INTO pro_kardex(codigo_barra,tipo,movimiento,entrada,salida,saldo,unidad,referencia,observacion,username,fecha)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+    [safeText(codigo_barra,80), safeText(tipo,180), safeText(movimiento,40), safeInt(entrada), safeInt(salida), saldo,
+     safeText(unidad,40), safeText(referencia,80), safeText(observacion,300), safeText(req.session.user?.username,80), safeText(fecha) || nowLocalISO()]
+  );
+}
+
+function crudRoutes({ base, table, fields, searchable=['nombre'] }){
+  app.get(`/api/pro/${base}`, requireAuth, async (req, res) => {
+    const q = safeText(req.query.q || '', 120).toLowerCase();
+    let rows;
+    if (q) {
+      const wh = searchable.map(f => `LOWER(COALESCE(${f},'')) LIKE ?`).join(' OR ');
+      rows = await db.all(`SELECT * FROM ${table} WHERE ${wh} ORDER BY id DESC`, searchable.map(() => `%${q}%`));
+    } else {
+      rows = await db.all(`SELECT * FROM ${table} ORDER BY id DESC`);
+    }
+    res.json({ items: rows || [] });
+  });
+  app.post(`/api/pro/${base}`, requireRole('supervisor','administrador'), async (req, res) => {
+    const vals = fields.map(f => req.body?.[f] ?? '');
+    const placeholders = fields.map(() => '?').join(',');
+    const sql = `INSERT INTO ${table}(${fields.join(',')}) VALUES(${placeholders})`;
+    const r = await db.run(sql, vals);
+    await logEvent(req, { action:'create', entity:`pro_${base}`, entityId:r.lastID, detail: JSON.stringify(req.body || {}) });
+    res.json({ ok:true, id:r.lastID });
+  });
+  app.put(`/api/pro/${base}/:id`, requireRole('supervisor','administrador'), async (req, res) => {
+    const id = safeInt(req.params.id);
+    const vals = fields.map(f => req.body?.[f] ?? '');
+    const set = fields.map(f => `${f}=?`).join(',');
+    await db.run(`UPDATE ${table} SET ${set}, updated_at=CURRENT_TIMESTAMP WHERE id=?`, [...vals, id]);
+    await logEvent(req, { action:'update', entity:`pro_${base}`, entityId:id, detail: JSON.stringify(req.body || {}) });
+    res.json({ ok:true });
+  });
+  app.delete(`/api/pro/${base}/:id`, requireRole('supervisor'), async (req, res) => {
+    const id = safeInt(req.params.id);
+    await db.run(`DELETE FROM ${table} WHERE id=?`, [id]);
+    await logEvent(req, { action:'delete', entity:`pro_${base}`, entityId:id });
+    res.json({ ok:true });
+  });
+}
+
+crudRoutes({ base:'proveedores', table:'pro_proveedores', fields:['nombre','ruc','telefono','correo','contacto','observaciones'], searchable:['nombre','ruc','telefono','contacto'] });
+crudRoutes({ base:'clientes', table:'pro_clientes', fields:['nombre','documento','telefono','correo','direccion','contacto','observaciones'], searchable:['nombre','documento','telefono','contacto'] });
+
+app.get('/api/pro/materiales', requireAuth, async (req, res) => {
+  const q = safeText(req.query.q || '', 120).toLowerCase();
+  const clauses = ["m.activo=1"];
+  const params = [];
+  if (q) {
+    clauses.push("(LOWER(COALESCE(m.tipo,'')) LIKE ? OR LOWER(COALESCE(m.codigo_barra,'')) LIKE ? OR LOWER(COALESCE(m.categoria,'')) LIKE ? OR LOWER(COALESCE(m.ubicacion,'')) LIKE ?)");
+    params.push(`%${q}%`,`%${q}%`,`%${q}%`,`%${q}%`);
+  }
+  const rows = await db.all(`
+    SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual, p.nombre AS proveedor,
+      CASE WHEN COALESCE(s.cantidad,0) <= m.stock_crit THEN 'CRÍTICO'
+           WHEN COALESCE(s.cantidad,0) <= m.stock_min THEN 'BAJO'
+           ELSE 'OK' END AS estado_stock
+    FROM pro_materiales m
+    LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo)
+    LEFT JOIN pro_proveedores p ON p.id=m.proveedor_id
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY estado_stock ASC, m.tipo ASC`, params);
+  res.json({ items: rows || [] });
+});
+
+app.get('/api/pro/materiales/barcode/:codigo', requireAuth, async (req, res) => {
+  const codigo = safeText(req.params.codigo, 80);
+  const row = await db.get(`SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.codigo_barra=? LIMIT 1`, [codigo]);
+  if (!row) return res.status(404).json({ error:'not-found' });
+  res.json({ item: row });
+});
+
+app.post('/api/pro/materiales', requireRole('supervisor','administrador'), async (req, res) => {
+  const b = req.body || {};
+  const tipo = safeText(b.tipo, 180);
+  if (!tipo) return res.status(400).json({ error:'tipo-required' });
+  const codigo = safeText(b.codigo_barra, 80) || null;
+  const unidad = safeText(b.unidad, 40);
+  const etiqueta = safeText(b.etiqueta, 180);
+  const stockInicial = safeInt(b.stock_inicial, 0);
+  const r = await db.run(`INSERT INTO pro_materiales(codigo_barra,tipo,categoria,etiqueta,unidad,ubicacion,stock_min,stock_crit,costo_unitario,proveedor_id)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`, [codigo, tipo, safeText(b.categoria,120), etiqueta, unidad, safeText(b.ubicacion,120), safeInt(b.stock_min), safeInt(b.stock_crit), safeFloat(b.costo_unitario), b.proveedor_id ? safeInt(b.proveedor_id) : null]);
+  if (stockInicial > 0) {
+    const fecha = safeText(b.fecha) || nowLocalISO();
+    await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, etiqueta, stockInicial, fecha, unidad]);
+    await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,total,fecha,unidad,action) VALUES(?,?,?,?,?,?,?)", [tipo, etiqueta, stockInicial, stockInicial, fecha, unidad, 'create']);
+    await rebuildStockForTipo(tipo);
+    await recordKardex(req, { codigo_barra:codigo || '', tipo, movimiento:'entrada inicial', entrada:stockInicial, unidad, referencia:`MAT-${r.lastID}`, fecha });
+  }
+  await logEvent(req, { action:'create', entity:'pro_materiales', entityId:r.lastID, detail: JSON.stringify({ tipo, codigo_barra: codigo }) });
+  res.json({ ok:true, id:r.lastID });
+});
+
+app.put('/api/pro/materiales/:id', requireRole('supervisor','administrador'), async (req, res) => {
+  const id = safeInt(req.params.id);
+  const b = req.body || {};
+  await db.run(`UPDATE pro_materiales SET codigo_barra=?, tipo=?, categoria=?, etiqueta=?, unidad=?, ubicacion=?, stock_min=?, stock_crit=?, costo_unitario=?, proveedor_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    [safeText(b.codigo_barra,80) || null, safeText(b.tipo,180), safeText(b.categoria,120), safeText(b.etiqueta,180), safeText(b.unidad,40), safeText(b.ubicacion,120), safeInt(b.stock_min), safeInt(b.stock_crit), safeFloat(b.costo_unitario), b.proveedor_id ? safeInt(b.proveedor_id) : null, id]);
+  await logEvent(req, { action:'update', entity:'pro_materiales', entityId:id });
+  res.json({ ok:true });
+});
+
+app.post('/api/pro/movimiento', requireRole('supervisor','administrador'), async (req, res) => {
+  const b = req.body || {};
+  const codigo = safeText(b.codigo_barra,80);
+  let material = null;
+  if (codigo) material = await db.get("SELECT * FROM pro_materiales WHERE codigo_barra=? LIMIT 1", [codigo]);
+  const tipo = safeText(b.tipo || material?.tipo, 180);
+  if (!tipo) return res.status(400).json({ error:'tipo-required' });
+  const unidad = safeText(b.unidad || material?.unidad, 40);
+  const cantidad = Math.max(0, safeInt(b.cantidad));
+  const accion = safeText(b.accion || 'entrada', 20).toLowerCase();
+  const fecha = safeText(b.fecha) || nowLocalISO();
+  const obs = safeText(b.observacion, 300);
+  if (cantidad <= 0) return res.status(400).json({ error:'cantidad-required' });
+
+  if (accion === 'entrada') {
+    await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, safeText(b.etiqueta || material?.etiqueta,180), cantidad, fecha, unidad]);
+    await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,total,fecha,unidad,action) VALUES(?,?,?,?,?,?,?)", [tipo, safeText(b.etiqueta || material?.etiqueta,180), cantidad, null, fecha, unidad, 'add']);
+    await rebuildStockForTipo(tipo);
+    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'entrada', entrada:cantidad, unidad, referencia:'SCAN-IN', observacion:obs, fecha });
+  } else if (accion === 'salida') {
+    const stock = await getStockForTipo(tipo);
+    if (stock < cantidad) return res.status(409).json({ error:'stock-insuficiente', stock });
+    await db.run("INSERT INTO stock_retiros(tipo,cantidad,unidad,fecha) VALUES(?,?,?,?)", [tipo, cantidad, unidad, fecha]);
+    await rebuildStockForTipo(tipo);
+    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'salida', salida:cantidad, unidad, referencia:'SCAN-OUT', observacion:obs, fecha });
+  } else if (accion === 'ajuste') {
+    await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, cantidad, unidad]);
+    await rebuildStockForTipo(tipo);
+    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'ajuste', entrada:cantidad, unidad, referencia:'AJUSTE', observacion:obs, fecha });
+  } else {
+    return res.status(400).json({ error:'accion-invalid' });
+  }
+  await logEvent(req, { action:`pro_${accion}`, entity:'stock', entityId:tipo, detail: JSON.stringify({ codigo_barra: codigo, cantidad, obs }) });
+  res.json({ ok:true, stock_actual: await getStockForTipo(tipo) });
+});
+
+app.get('/api/pro/kardex', requireAuth, async (req, res) => {
+  const q = safeText(req.query.q || '', 120).toLowerCase();
+  const params = [];
+  let where = '';
+  if (q) { where = "WHERE LOWER(tipo) LIKE ? OR LOWER(COALESCE(codigo_barra,'')) LIKE ? OR LOWER(COALESCE(referencia,'')) LIKE ?"; params.push(`%${q}%`,`%${q}%`,`%${q}%`); }
+  const rows = await db.all(`SELECT * FROM pro_kardex ${where} ORDER BY created_at DESC, id DESC LIMIT 500`, params);
+  res.json({ items: rows || [] });
+});
+
+app.post('/api/pro/conteo', requireRole('supervisor','administrador'), async (req, res) => {
+  const b = req.body || {};
+  const codigo = safeText(b.codigo_barra,80);
+  let material = null;
+  if (codigo) material = await db.get("SELECT * FROM pro_materiales WHERE codigo_barra=? LIMIT 1", [codigo]);
+  const tipo = safeText(b.tipo || material?.tipo, 180);
+  const stockSistema = await getStockForTipo(tipo);
+  const stockFisico = safeInt(b.stock_fisico);
+  const dif = stockFisico - stockSistema;
+  const fecha = safeText(b.fecha) || nowLocalISO();
+  await db.run("INSERT INTO pro_conteos_inventario(codigo_barra,tipo,stock_sistema,stock_fisico,diferencia,motivo,fecha,username) VALUES(?,?,?,?,?,?,?,?)", [codigo, tipo, stockSistema, stockFisico, dif, safeText(b.motivo,300), fecha, safeText(req.session.user?.username,80)]);
+  if (String(b.aplicar_ajuste || '') === '1') {
+    await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, stockFisico, safeText(b.unidad || material?.unidad,40)]);
+    await rebuildStockForTipo(tipo);
+    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'conteo físico', entrada:Math.max(stockFisico,0), unidad:safeText(b.unidad || material?.unidad,40), referencia:'CONTEO', observacion:safeText(b.motivo,300), fecha });
+  }
+  await logEvent(req, { action:'conteo', entity:'pro_conteo', entityId:tipo, detail: JSON.stringify({ stockSistema, stockFisico, dif }) });
+  res.json({ ok:true, diferencia:dif, stock_sistema:stockSistema, stock_fisico:stockFisico });
+});
+
+app.get('/api/pro/conteos', requireAuth, async (req, res) => {
+  const rows = await db.all("SELECT * FROM pro_conteos_inventario ORDER BY created_at DESC, id DESC LIMIT 300");
+  res.json({ items: rows || [] });
+});
+
+app.get('/api/pro/productos-terminados', requireAuth, async (req, res) => {
+  const rows = await db.all("SELECT pt.*, c.nombre AS cliente FROM pro_productos_terminados pt LEFT JOIN pro_clientes c ON c.id=pt.cliente_id ORDER BY pt.producto ASC");
+  res.json({ items: rows || [] });
+});
+app.post('/api/pro/productos-terminados', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{}; const producto=safeText(b.producto,180); if(!producto) return res.status(400).json({error:'producto-required'});
+  const r=await db.run("INSERT INTO pro_productos_terminados(codigo_barra,producto,descripcion,unidad,stock,stock_min,cliente_id) VALUES(?,?,?,?,?,?,?)", [safeText(b.codigo_barra,80)||null, producto, safeText(b.descripcion,300), safeText(b.unidad,40), safeInt(b.stock), safeInt(b.stock_min), b.cliente_id ? safeInt(b.cliente_id) : null]);
+  await logEvent(req,{action:'create',entity:'pro_productos_terminados',entityId:r.lastID}); res.json({ok:true,id:r.lastID});
+});
+app.put('/api/pro/productos-terminados/:id', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{}; const id=safeInt(req.params.id);
+  await db.run("UPDATE pro_productos_terminados SET codigo_barra=?, producto=?, descripcion=?, unidad=?, stock=?, stock_min=?, cliente_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.codigo_barra,80)||null, safeText(b.producto,180), safeText(b.descripcion,300), safeText(b.unidad,40), safeInt(b.stock), safeInt(b.stock_min), b.cliente_id ? safeInt(b.cliente_id) : null, id]);
+  res.json({ok:true});
+});
+
+app.get('/api/pro/ordenes-produccion', requireAuth, async (req,res)=>{
+  const rows=await db.all("SELECT * FROM pro_ordenes_produccion ORDER BY created_at DESC, id DESC LIMIT 300"); res.json({items:rows||[]});
+});
+app.post('/api/pro/ordenes-produccion', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{}; const codigo=safeText(b.codigo,80) || `OP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+  const r=await db.run("INSERT INTO pro_ordenes_produccion(codigo,producto,cantidad_planificada,cantidad_producida,estado,responsable,observacion,fecha) VALUES(?,?,?,?,?,?,?,?)", [codigo,safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente',safeText(b.responsable,120),safeText(b.observacion,300),safeText(b.fecha)||nowLocalISO()]);
+  await logEvent(req,{action:'create',entity:'pro_ordenes_produccion',entityId:r.lastID,detail:codigo}); res.json({ok:true,id:r.lastID,codigo});
+});
+app.put('/api/pro/ordenes-produccion/:id', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{}; const id=safeInt(req.params.id);
+  await db.run("UPDATE pro_ordenes_produccion SET producto=?, cantidad_planificada=?, cantidad_producida=?, estado=?, responsable=?, observacion=?, fecha=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente',safeText(b.responsable,120),safeText(b.observacion,300),safeText(b.fecha)||nowLocalISO(),id]);
+  res.json({ok:true});
+});
+
+app.get('/api/pro/dashboard', requireAuth, async (req, res) => {
+  const mats = await db.get("SELECT COUNT(*) AS c FROM pro_materiales WHERE activo=1");
+  const crit = await db.get(`SELECT COUNT(*) AS c FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.activo=1 AND COALESCE(s.cantidad,0) <= m.stock_crit`);
+  const low = await db.get(`SELECT COUNT(*) AS c FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.activo=1 AND COALESCE(s.cantidad,0) <= m.stock_min`);
+  const op = await db.get("SELECT COUNT(*) AS c FROM pro_ordenes_produccion WHERE estado IN ('Pendiente','En proceso')");
+  const envPend = await db.get("SELECT COUNT(*) AS c FROM envios WHERE date(substr(fecha,1,10)) >= date('now','-30 day')");
+  res.json({ materiales:mats?.c||0, stock_critico:crit?.c||0, stock_bajo:low?.c||0, ordenes_abiertas:op?.c||0, envios_30d:envPend?.c||0 });
 });
 
 // -----------------------------------------------------------------------------

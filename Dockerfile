@@ -1,34 +1,22 @@
-# Imagen base de Node con Debian (compatibles sqlite3, pdfkit, etc.)
-FROM node:20-bookworm-slim
-
-# Directorio de trabajo dentro del contenedor
+# Etapa 1: instalar dependencias nativas sin dejar herramientas de compilación en runtime
+FROM node:20-bookworm-slim AS deps
 WORKDIR /usr/src/app
-
-# Paquetes para compilar dependencias nativas (sqlite3, etc.)
-RUN apt-get update && \
-    apt-get install -y python3 build-essential && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copiar solo package.json/package-lock primero para aprovechar cache
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
-
-# Instalar dependencias en modo producción
 RUN npm ci --omit=dev || npm install --omit=dev
 
-# Copiar el resto del proyecto
-COPY . .
-
-# Crear carpeta de datos y dar permisos al usuario "node"
-RUN mkdir -p Data data && chown -R node:node /usr/src/app
-
-# Usar usuario no root
-USER node
-
-# Variables de entorno por defecto (se pueden sobreescribir en docker run)
+# Etapa 2: imagen final ligera para VPS
+FROM node:20-bookworm-slim
+WORKDIR /usr/src/app
 ENV NODE_ENV=production
-
-# Puerto donde escucha tu app
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+COPY package*.json ./
+COPY server.js ./
+COPY public ./public
+RUN mkdir -p Data \
+  && chown -R node:node /usr/src/app
+USER node
 EXPOSE 3000
-
-# Comando de inicio
 CMD ["npm", "start"]
