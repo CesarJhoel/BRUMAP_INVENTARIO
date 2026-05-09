@@ -1,1107 +1,686 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer">
-  <title>Brumap Inventario</title>
-  <link rel="stylesheet" href="./assets/css/style.css">
-  <link rel="icon" type="image/png" href="./assets/img/favicon.png">
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<meta content="no-referrer" name="referrer"/>
+<title>Brumap Inventario</title>
+<link href="./assets/css/style.css" rel="stylesheet"/>
+<link href="./assets/css/dashboard-pro.css" rel="stylesheet"/>
+<link href="./assets/img/favicon.png" rel="icon" type="image/png"/>
+<!-- Chart.js para gráficos del dashboard -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body class="bg-app">
-
 <!-- BARRA SUPERIOR -->
 <header class="topbar">
-  <div class="topbar-inner">
-    <!-- IZQUIERDA: logo + texto -->
-    <div class="top-left">
-      <button class="btn-small btn-white mobile-menu-btn" type="button" id="btnMobileMenu" aria-label="Abrir menú">☰</button>
-      <img src="./assets/img/brumap_logo.png" class="top-logo" alt="Brumap">
-      <span class="top-brand">BRUMAP</span>
-    </div>
-
-    <!-- CENTRO: accesos globales (compacto en versión UI PRO) -->
-    <div class="top-center top-center-pro">
-      <button class="btn-small btn-white export-full" type="button" data-export="registros" data-format="pdf" data-all="1" id="pdfAllRegistros">
-        <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
-        <span>PDF Registros Completos</span>
-      </button>
-      <button class="btn-small btn-white export-full" type="button" data-export="registros" data-format="xlsx" data-all="1" id="xlsxAllRegistros">
-        <span class="excel-badge">X</span>
-        <span>Excel Registros Completos</span>
-      </button>
-    </div>
-
-    <!-- DERECHA: salir -->
-    <div class="top-right">
-      <button class="btn-small" id="themeToggle" type="button">
-        <img src="./assets/img/icon_theme.svg" alt="" class="icon-img">
-        <span>Tema</span>
-      </button>
-      <button class="btn-small" id="logoutBtn">
-        <img src="./assets/img/icon_logout.svg" alt="" class="icon-img">
-        <span>Salir</span>
-      </button>
-    </div>
-  </div>
+<div class="topbar-inner">
+<!-- IZQUIERDA: logo + texto -->
+<div class="top-left">
+<button aria-label="Abrir menú" class="btn-small btn-white mobile-menu-btn" id="btnMobileMenu" type="button">☰</button>
+<img alt="Brumap" class="top-logo" src="./assets/img/brumap_logo.png"/>
+<span class="top-brand">BRUMAP</span>
+</div>
+<!-- CENTRO: accesos globales (compacto en versión UI PRO) -->
+<div class="top-center top-center-pro">
+<button class="btn-small btn-white export-full" data-all="1" data-format="pdf" data-pro-export-url="/api/pro/materiales.pdf" id="pdfAllRegistros" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_pdf.svg"/>
+<span>PDF Catálogo Almacén</span>
+</button>
+</div>
+<!-- DERECHA: salir -->
+<div class="top-right">
+<button class="btn-small" id="themeToggle" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_theme.svg"/>
+<span>Tema</span>
+</button>
+<button class="btn-small" id="logoutBtn">
+<img alt="" class="icon-img" src="./assets/img/icon_logout.svg"/>
+<span>Salir</span>
+</button>
+</div>
+</div>
 </header>
-
-<div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
-
+<div aria-hidden="true" class="sidebar-overlay" id="sidebarOverlay"></div>
 <!-- MENÚ LATERAL -->
 <aside class="sidebar" id="sidebar">
-  <nav class="menu">
-    <a class="menu-item active" href="#dashboard">
-      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
-      <span>Dashboard</span>
-    </a>
-
-    <a class="menu-item" href="#recepciones">
-      <img src="./assets/img/icon_recepciones.svg" alt="" class="icon-img">
-      <span>Recepción de Materiales</span>
-    </a>
-
-    
-    <a class="menu-item" href="#stock">
-      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
-      <span>Stock de materiales</span>
-    </a>
-<a class="menu-item" href="#produccion">
-      <img src="./assets/img/icon_produccion.svg" alt="" class="icon-img">
-      <span>Producción</span>
-    </a>
-
-    <a class="menu-item" href="#defectuosos">
-      <img src="./assets/img/icon_defectuosos.svg" alt="" class="icon-img">
-      <span>Manejo de Material Defectuoso</span>
-    </a>
-
-    <a class="menu-item" href="#envios">
-      <img src="./assets/img/icon_envios.svg" alt="" class="icon-img">
-      <span>Envío de Productos Terminados</span>
-    </a>
-
-	    <a class="menu-item only-supervisor" href="#maquinaria">
-	      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
-	      <span>Maquinaria</span>
-	    </a>
-
-	    <a class="menu-item only-supervisor" href="#repuestos">
-	      <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
-	      <span>Repuestos e Inventario</span>
-	    </a>
-
-
-    <a class="menu-item only-supervisor" href="#almacen-pro">
-      <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
-      <span>Almacén Pro</span>
-    </a>
-
-    <a class="menu-item only-supervisor" href="#advanced">
-      <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
-      <span>Opciones avanzadas</span>
-    </a>
-  </nav>
-
-  <div class="sidebar-footer">
-    <span id="whoami" class="tag">Usuario Brumap</span>
-  </div>
+<nav class="menu"><a class="menu-item active" href="#dashboard"><img alt="" class="icon-img" src="./assets/img/icon_audit.svg"/><span>Dashboard</span></a>
+<a class="menu-item" href="#almacen"><img alt="" class="icon-img" src="./assets/img/icon_audit.svg"/><span>Almacén</span></a>
+<a class="menu-item" href="#defectuosos"><img alt="" class="icon-img" src="./assets/img/icon_defectuosos.svg"/><span>Manejo de Material Defectuoso</span></a>
+<a class="menu-item only-supervisor" href="#maquinaria"><img alt="" class="icon-img" src="./assets/img/icon_audit.svg"/><span>Maquinaria</span></a>
+<a class="menu-item only-supervisor" href="#repuestos"><img alt="" class="icon-img" src="./assets/img/icon_backup.svg"/><span>Repuestos e Inventario</span></a>
+<a class="menu-item only-supervisor" href="#advanced"><img alt="" class="icon-img" src="./assets/img/icon_backup.svg"/><span>Opciones avanzadas</span></a>
+</nav>
+<div class="sidebar-footer">
+<span class="tag" id="whoami">Usuario Brumap</span>
+</div>
 </aside>
-
 <!-- CONTENIDO PRINCIPAL -->
 <main class="workspace">
-
-  <!-- DASHBOARD UI PRO -->
-  <section class="section dashboard-section" id="dashboard">
-    <div class="page-hero card">
-      <div>
-        <span class="eyebrow">Panel general</span>
-        <h2>Control operativo BRUMAP</h2>
-        <p>Vista rápida para supervisar recepción, stock, producción y envíos sin perder acceso a los módulos existentes.</p>
-      </div>
-      <div class="hero-actions">
-        <button class="btn btn-primary" type="button" data-go="#recepciones">Nueva recepción</button>
-        <button class="btn btn-white" type="button" data-go="#stock">Ver stock</button>
-      </div>
-    </div>
-
-    <div class="kpi-grid">
-      <article class="kpi-card card">
-        <span>Recepciones</span>
-        <strong id="kpiRecepciones">0</strong>
-        <small>Registros cargados</small>
-      </article>
-      <article class="kpi-card card">
-        <span>Stock</span>
-        <strong id="kpiStock">0</strong>
-        <small>Materiales en inventario</small>
-      </article>
-      <article class="kpi-card card">
-        <span>Producción</span>
-        <strong id="kpiProduccion">0</strong>
-        <small>Órdenes registradas</small>
-      </article>
-      <article class="kpi-card card">
-        <span>Envíos</span>
-        <strong id="kpiEnvios">0</strong>
-        <small>Salidas registradas</small>
-      </article>
-    </div>
-
-    <div class="dashboard-grid">
-      <div class="card quick-card">
-        <h3>Accesos rápidos</h3>
-        <div class="quick-actions">
-          <button class="btn-small btn-white" type="button" data-go="#recepciones">Recepción</button>
-          <button class="btn-small btn-white" type="button" data-go="#stock">Stock</button>
-          <button class="btn-small btn-white" type="button" data-go="#produccion">Producción</button>
-          <button class="btn-small btn-white" type="button" data-go="#envios">Envíos</button>
-          <button class="btn-small btn-white only-supervisor" type="button" data-go="#advanced">Opciones avanzadas</button>
-        </div>
-      </div>
-      <div class="card quick-card">
-        <h3>Exportaciones completas</h3>
-        <p class="subtitle">Se mantienen los mismos botones originales de exportación; solo se reubican visualmente para no saturar la barra superior.</p>
-        <div class="quick-actions dashboard-exports">
-          <button class="btn-small btn-white" type="button" data-export="registros" data-format="pdf" data-all="1">PDF completo</button>
-          <button class="btn-small btn-white" type="button" data-export="registros" data-format="xlsx" data-all="1">Excel completo</button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- RECEPCIÓN -->
-  <section class="section" id="recepciones">
-    <h3 class="panel-title">Recepción de Materiales</h3>
-
-    <form class="form two-col card" data-form="recepciones">
-<input class="input col-span" placeholder="Tipo de material" name="tipo" required>
-
-      <input class="input col-span" placeholder="Etiqueta" name="etiqueta">
-
-      <input class="input input-qty" placeholder="Cantidad" name="cantidad" type="number" min="1" required>
-      <select class="input input-unit" name="unidad" required>
-        <option value="kg">Kilogramos</option>
-        <option value="cajas">Cajas</option>
-        <option value="unidades">Unidades</option>
-      </select>
-
-      <div class="date-row col-span">
-        <input class="input input-datetime" type="datetime-local" name="fecha" required>
-        <button class="btn-small btn-white now-btn" type="button" data-now="recepciones">
-          <span>Ahora</span>
-        </button>
-      </div>
-
-      <div class="col-span actions-row">
-      <div class="col-span actions-row actions-split">
-		<div class="actions-left">
-		  <button class="btn btn-white btn-uniform" type="button" data-export="recepciones" data-format="xlsx" data-all="1">
-          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
-          <span>Exportar Excel</span>
-        </button>
-		<button class="btn btn-white btn-uniform" type="button" data-export="recepciones" data-format="pdf" data-all="1">
-          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
-          <span>Exportar PDF</span>
-        </button>
-
-		<button class="btn btn-white btn-uniform no-operario" type="button" id="btnToggleAjusteRecep">
-          <img src="./assets/img/icon_audit.svg" alt="" class="icon-img">
-          <span>Modificar entrada actual</span>
-        </button>
-        </div>
-        <div class="actions-right">
-          <button class="btn btn-primary" type="submit">Registrar Recepción</button>
-        </div>
-      </div>
+<!-- ═══════════════════════════════════════════════════════════
+       DASHBOARD PRO — con gráficos, alertas y actividad reciente
+       ═══════════════════════════════════════════════════════════ -->
+<section class="section dashboard-section" id="dashboard">
+<!-- Hero + acciones rápidas -->
+<div class="dash-hero">
+<div class="dash-hero-text">
+<span class="eyebrow">Panel general</span>
+<h2>Control operativo BRUMAP</h2>
+<p>Visión 360° del almacén, materiales, productos terminados y envíos trazables.</p>
+</div>
+<div class="dash-hero-meta">
+<span class="dash-meta-item">⏱ Actualizado: <strong id="dashLastUpdate">—</strong></span>
+</div>
+<div class="dash-hero-actions"><button class="btn btn-primary" data-go="#almacen" type="button">+ Registrar movimiento</button>
+<button class="btn btn-white" id="btnDashRefresh" type="button">↻ Actualizar</button>
+<button class="btn btn-white" data-go="#almacen" type="button">Ver almacén</button>
+</div>
+</div>
+<!-- ── KPI Cards ── -->
+<div class="kpi-grid-pro">
+<article class="kpi-card-pro kpi-recep">
+<span class="kpi-icon">📥</span>
+<span class="kpi-label">Materiales</span>
+<strong class="kpi-value" id="kpiRecepciones">—</strong>
+<span class="kpi-sub">Registros activos</span>
+</article>
+<article class="kpi-card-pro kpi-stock">
+<span class="kpi-icon">📦</span>
+<span class="kpi-label">Stock bajo</span>
+<strong class="kpi-value" id="kpiStock">—</strong>
+<span class="kpi-sub" id="kpiStockTotal">Materiales bajo mínimo</span>
+</article>
+<article class="kpi-card-pro kpi-prod">
+<span class="kpi-icon">⚙️</span>
+<span class="kpi-label">Productos terminados</span>
+<strong class="kpi-value" id="kpiProduccion">—</strong>
+<span class="kpi-sub">Catálogo terminado</span>
+</article>
+<article class="kpi-card-pro kpi-envio">
+<span class="kpi-icon">🚚</span>
+<span class="kpi-label">Envíos 30 días</span>
+<strong class="kpi-value" id="kpiEnvios">—</strong>
+<span class="kpi-sub">Salidas recientes</span>
+</article>
+<article class="kpi-card-pro kpi-defect">
+<span class="kpi-icon">⚠️</span>
+<span class="kpi-label">Defectuosos</span>
+<strong class="kpi-value" id="kpiDefectuosos">—</strong>
+<span class="kpi-sub">Material rechazado</span>
+</article>
+<article class="kpi-card-pro kpi-alert">
+<span class="kpi-icon">🔔</span>
+<span class="kpi-label">Órdenes abiertas</span>
+<strong class="kpi-value" id="kpiAlertas">—</strong>
+<span class="kpi-sub">Pendientes/proceso</span>
+</article>
+</div>
+<!-- ── Resumen general por apartado ── -->
+<div class="dash-chart-card dash-wide-card dash-summary-card">
+<div class="dash-card-header">
+<h4>📌 Resumen general por apartado</h4>
+<span class="card-header-meta">Datos consolidados de Almacén y módulos principales</span>
+</div>
+<div id="dashApartadosResumen" class="dash-apartados-grid">
+<div class="dash-empty-state"><p>Cargando resumen…</p></div>
+</div>
 </div>
 
-    <!-- AJUSTE DE STOCK (solo administrador/supervisor) -->
-    <div class="card mt-sm no-operario" id="ajusteRecepBox" style="display:none;">
-      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Modificar entrada actual (Ajuste de stock)</h4>
-      <div class="subtitle">
-        Esta opción crea un <b>ajuste de stock</b> para un material ya registrado. Los movimientos previos quedarán en el historial,
-        pero <b>dejarán de influir</b> en el stock actual (desde este momento el stock se recalculará tomando como base la cantidad ingresada).
-      </div>
-
-      <div class="actions-row mt-sm">
-        <select class="input inline-edit select-compact" id="ajusteRecepSelect"></select>
-        <input class="input inline-edit" id="ajusteRecepCantidad" type="number" min="0" placeholder="Nueva cantidad base">
-        <input class="input inline-edit" id="ajusteRecepFecha" type="datetime-local">
-        <button class="btn-small btn-white" type="button" id="ajusteRecepNow">Ahora</button>
-        <button class="btn-small" type="button" id="ajusteRecepApply">Aplicar ajuste</button>
-      </div>
-
-      <p class="subtitle mt-sm">
-        Advertencia: aplicar un ajuste cambiará el stock de este material. Confirma antes de continuar.
-      </p>
-      <p id="ajusteRecepStatus" class="subtitle mt-sm"></p>
-    </div></form>
-
-    <!-- Filtro por rango de fechas + contador + exportaciones por selección -->
-    <div class="card mt-lg" data-filter-scope="recepciones">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="recepciones" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="recepciones" aria-label="Hasta">
-
-        
-        <input class="input input-search" type="text" data-filter-q="recepciones" placeholder="Buscar...">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="recepciones" placeholder="Min">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="recepciones" placeholder="Max">
-        <select class="input inline-edit select-compact" data-sort-scope="recepciones" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-
-<button class="btn-small btn-white" type="button" data-filter-apply="recepciones">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="recepciones">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="recepciones">Mostrar todo</button>
-
-        <span class="tag">Registros: <b id="count-recepciones">0</b></span>
-
-        <button class="btn-small btn-white" type="button" data-export="recepciones" data-format="xlsx">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn-small btn-white" type="button" data-export="recepciones" data-format="pdf">
-          <span>Exportar PDF</span>
-        </button>
-      </div>
-    </div>
-
-    <div class="card mt-lg">
-      <table class="table" data-table="recepciones">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th class="col-tipo">Tipo</th>
-            <th class="col-etiqueta">Etiqueta</th>
-            <th>Cantidad</th>
-            <th>Unidad</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-
-  <!-- STOCK -->
-  <section class="section" id="stock">
-    <h3 class="panel-title">Stock de materiales</h3>
-
-    <div class="card">
-      <div class="actions-row stock-toolbar">
-        <button class="btn-small btn-white" type="button" id="btnShowStock">Ver stock actual</button>
-        <button class="btn-small btn-white only-supervisor" type="button" id="btnShowRetiros">Historial de retiros</button>
-	        <button class="btn-small btn-white" type="button" id="btnExportStockXlsx" data-export="stock" data-format="xlsx" data-all="1">
-	          <img src="./assets/img/icon_backup.svg" alt="" class="icon-img"> Exportar Excel
-	        </button>
-	        <button class="btn-small btn-white" type="button" id="btnExportStockPdf" data-export="stock" data-format="pdf" data-all="1">
-	          <img src="./assets/img/icon_backup.svg" alt="" class="icon-img"> Exportar PDF
-	        </button>
-        <span class="tag">Materiales: <b id="count-stock">0</b></span>
-      </div>
-      <p id="stockMsg" class="subtitle mt-sm"></p>
-    </div>
-
-    <div class="card mt-lg" data-filter-scope="stock">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="stock" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="stock" aria-label="Hasta">
-        <input class="input input-search" type="text" data-filter-q="stock" placeholder="Buscar...">
-        <select class="input inline-edit select-compact" data-sort-scope="stock" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-        <button class="btn-small btn-white" type="button" data-filter-apply="stock">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="stock">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="stock">Mostrar todo</button>
-      </div>
-    </div>
-
-    <div class="card mt-lg only-supervisor" id="stockRetiroCard">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Retiro de materiales</div>
-      <form class="actions-row" id="stockRetiroForm">
-        <select class="input inline-edit select-compact" id="stock_tipo" required></select>
-        <input class="input input-qty" id="stock_cantidad" type="number" min="1" step="1" placeholder="Cantidad" required>
-        <input class="input inline-edit" id="stock_unidad" placeholder="Unidad" readonly>
-        <button class="btn-small" type="submit">Retirar</button>
-	        <button class="btn-small btn-white" type="button" id="btnDeleteStockItem">Eliminar Producto</button>
-      </form>
-    </div>
-
-    <div class="card mt-lg" id="stockTableCard">
-      <table class="table" id="stockTable">
-        <thead>
-          <tr>
-            <th class="col-material">Material</th>
-            <th class="col-etiqueta">Etiqueta</th>
-            <th class="col-num">Cantidad</th>
-            <th class="col-num">Unidad</th>
-            <th class="col-status">Estado</th>
-            <th class="col-date">Actualizado</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <div class="card mt-lg" id="retirosTableCard" style="display:none;">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="stock_retiros" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="stock_retiros" aria-label="Hasta">
-        <input class="input input-search" type="text" data-filter-q="stock_retiros" placeholder="Buscar...">
-        <select class="input inline-edit select-compact" data-sort-scope="stock_retiros" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-        <button class="btn-small btn-white" type="button" data-filter-apply="stock_retiros">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="stock_retiros">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="stock_retiros">Mostrar todo</button>
-      </div>
-
-	      <div class="actions-row retiros-actions" style="justify-content:flex-end; gap:8px; margin-bottom:10px;">
-	        <button class="btn-small btn-white only-supervisor" type="button" data-export="stock_retiros" data-format="xlsx" data-all="1">
-	          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img-sm"> Excel
-	        </button>
-	        <button class="btn-small btn-white only-supervisor" type="button" data-export="stock_retiros" data-format="pdf" data-all="1">
-	          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img-sm"> PDF
-	        </button>
-	      </div>
-      <table class="table" id="retirosTable">
-        <thead>
-          <tr>
-            <th class="col-date">Fecha</th>
-            <th class="col-material">Material</th>
-            <th class="col-num">Cantidad</th>
-            <th class="col-num">Unidad</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- PRODUCCIÓN -->
-  <section class="section" id="produccion">
-    <h3 class="panel-title">Producción</h3>
-
-    <form class="form two-col card" data-form="produccion">
-<input class="input col-span" placeholder="Tipo de producto" name="tipo" required>
-
-      <input class="input input-qty" placeholder="Cantidad Fabricada" name="cantidad" type="number" min="1" required>
-      <select class="input input-unit" name="unidad" required>
-        <option value="kg">Kilogramos</option>
-        <option value="cajas">Cajas</option>
-        <option value="unidades">Unidades</option>
-      </select>
-
-      <div class="date-row col-span">
-        <input class="input input-datetime" type="datetime-local" name="fecha_ini" placeholder="Fecha y hora de producción" required>
-        <button class="btn-small btn-white now-btn" type="button" data-now="produccion">
-          <span>Ahora</span>
-        </button>
-      </div>
-
-      <div class="col-span actions-row">
-      <div class="col-span actions-row actions-split">
-        <div class="actions-left">
-          <button class="btn btn-white" type="button" data-export="produccion" data-format="xlsx" data-all="1">
-          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn btn-white" type="button" data-export="produccion" data-format="pdf" data-all="1">
-          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
-          <span>Exportar PDF</span>
-        </button>
-        </div>
-        <div class="actions-right">
-          <button class="btn btn-primary" type="submit">Registrar Producción</button>
-        </div>
-      </div>
+<!-- ── Fila 1 de gráficos: Recepciones por material + Distribución stock ── -->
+<div class="dash-grid-2">
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>📊 Entradas por material</h4>
+<span class="card-header-meta">Top 8 materiales</span>
+</div>
+<p class="chart-subtitle">Cantidad de registros por tipo de material recibido</p>
+<div class="chart-wrap">
+<canvas id="chartRecepciones"></canvas>
+</div>
+</div>
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>🥧 Distribución del stock</h4>
+<span class="card-header-meta">Por material</span>
+</div>
+<p class="chart-subtitle">Volumen de unidades por tipo de material en inventario</p>
+<div class="chart-wrap">
+<canvas id="chartStock"></canvas>
+</div>
+</div>
+</div>
+<!-- ── Fila 2 de gráficos: Tendencia + Defectuosos ── -->
+<div class="dash-grid-2">
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>📈 Tendencia: Recepciones vs Envíos</h4>
+<span class="card-header-meta">Últimos 6 meses</span>
+</div>
+<p class="chart-subtitle">Comparativa mensual de entradas y salidas</p>
+<div class="chart-wrap-tall">
+<canvas id="chartTendencia"></canvas>
+</div>
+</div>
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>🚫 Defectuosos por material</h4>
+<span class="card-header-meta">Top 6</span>
+</div>
+<p class="chart-subtitle">Materiales con mayor cantidad de rechazos</p>
+<div class="chart-wrap-tall">
+<canvas id="chartDefectuosos"></canvas>
+</div>
+</div>
+</div>
+<!-- ── Fila 3: Alertas + Actividad + Producción ── -->
+<div class="dash-grid-3">
+<!-- Alertas de stock -->
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>🔔 Alertas de stock
+            <span class="alertas-badge" id="alertasBadge" style="display:none">0</span>
+</h4>
+</div>
+<div id="dashAlertas">
+<div class="dash-empty-state"><p>Cargando…</p></div>
+</div>
+</div>
+<!-- Actividad reciente -->
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>⚡ Actividad reciente</h4>
+<span class="card-header-meta">Últimos 10 eventos</span>
+</div>
+<div id="dashActividad">
+<div class="dash-empty-state"><p>Cargando…</p></div>
+</div>
+</div>
+<!-- Últimas órdenes de producción -->
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>⚙️ Últimas órdenes de producción</h4>
+</div>
+<div id="dashProduccionResumen">
+<div class="dash-empty-state"><p>Cargando…</p></div>
+</div>
+</div>
+</div>
+<!-- ── Fila 4: Exportaciones rápidas + Accesos ── -->
+<div class="dash-grid-2">
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>📁 Exportaciones rápidas</h4>
+</div>
+<div class="dash-export-grid"><button class="dash-export-btn" data-pro-export-url="/api/pro/materiales.pdf" type="button">📄 PDF Materiales</button>
+<button class="dash-export-btn" data-pro-export-url="/api/pro/productos-terminados.pdf" type="button">📄 PDF Productos terminados</button>
+<button class="dash-export-btn" data-pro-export-url="/api/pro/kardex.pdf" type="button">📄 PDF Kardex</button>
+<button class="dash-export-btn" data-pro-export-url="/api/pro/envios-terminados.pdf" type="button">📄 PDF Envíos terminados</button>
+</div>
+</div>
+<div class="dash-chart-card">
+<div class="dash-card-header">
+<h4>🚀 Accesos rápidos</h4>
+</div>
+<div class="quick-actions" style="gap:8px;flex-wrap:wrap;"><button class="btn btn-white" data-go="#almacen" style="flex:1;min-width:130px" type="button">🏭 Almacén</button>
+<button class="btn btn-white" data-go="#defectuosos" style="flex:1;min-width:130px" type="button">⚠️ Defectuosos</button>
+<button class="btn btn-white only-supervisor" data-go="#maquinaria" style="flex:1;min-width:130px" type="button">🛠 Maquinaria</button>
+<button class="btn btn-white only-supervisor" data-go="#repuestos" style="flex:1;min-width:130px" type="button">🔩 Repuestos</button>
+</div>
+</div>
+</div>
+</section>
+<!-- RECEPCIÓN -->
+<!-- STOCK -->
+<!-- PRODUCCIÓN -->
+<!-- DEFECTUOSOS -->
+<section class="section" id="defectuosos">
+<h3 class="panel-title">Manejo de Material Defectuoso</h3>
+<form class="form two-col card" data-form="defectuosos">
+<input class="input col-span" name="tipo" placeholder="Tipo de material" required=""/>
+<input class="input input-qty" min="1" name="cantidad" placeholder="Cantidad descartada" required="" type="number"/>
+<select class="input input-unit" name="unidad" required="">
+<option value="kg">Kilogramos</option>
+<option value="cajas">Cajas</option>
+<option value="unidades">Unidades</option>
+</select>
+<input class="input col-span input-razon" name="razon" placeholder="Razón del descarte"/>
+<div class="date-row col-span">
+<input class="input input-date" name="fecha" required="" type="date"/>
+<button class="btn-small btn-white now-btn" data-now="defectuosos" type="button">
+<span>Ahora</span>
+</button>
+</div>
+<div class="col-span actions-row">
+<div class="col-span actions-row actions-split">
+<div class="actions-left">
+<button class="btn btn-white" data-all="1" data-export="defectuosos" data-format="xlsx" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_excel.svg"/>
+<span>Exportar Excel</span>
+</button>
+<button class="btn btn-white" data-all="1" data-export="defectuosos" data-format="pdf" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_pdf.svg"/>
+<span>Exportar PDF</span>
+</button>
+</div>
+<div class="actions-right">
+<button class="btn btn-primary" type="submit">Registrar Descarte</button>
+</div>
+</div>
 </div>
 </form>
-
-    <div class="card mt-lg" data-filter-scope="produccion">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="produccion" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="produccion" aria-label="Hasta">
-
-        
-        <input class="input input-search" type="text" data-filter-q="produccion" placeholder="Buscar...">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="produccion" placeholder="Min">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="produccion" placeholder="Max">
-        <select class="input inline-edit select-compact" data-sort-scope="produccion" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-
-<button class="btn-small btn-white" type="button" data-filter-apply="produccion">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="produccion">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="produccion">Mostrar todo</button>
-
-        <span class="tag">Registros: <b id="count-produccion">0</b></span>
-
-        <button class="btn-small btn-white" type="button" data-export="produccion" data-format="xlsx">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn-small btn-white" type="button" data-export="produccion" data-format="pdf">
-          <span>Exportar PDF</span>
-        </button>
-      </div>
-    </div>
-
-    <div class="card mt-lg">
-      <table class="table" data-table="produccion">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th class="col-tipo">Tipo de producto</th>
-            <th>Cantidad</th>
-            <th>Unidad</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- DEFECTUOSOS -->
-  <section class="section" id="defectuosos">
-    <h3 class="panel-title">Manejo de Material Defectuoso</h3>
-
-    <form class="form two-col card" data-form="defectuosos">
-<input class="input col-span" placeholder="Tipo de material" name="tipo" required>
-
-      <input class="input input-qty" placeholder="Cantidad descartada" name="cantidad" type="number" min="1" required>
-      <select class="input input-unit" name="unidad" required>
-        <option value="kg">Kilogramos</option>
-        <option value="cajas">Cajas</option>
-        <option value="unidades">Unidades</option>
-      </select>
-
-      <input class="input col-span input-razon" placeholder="Razón del descarte" name="razon">
-
-      <div class="date-row col-span">
-        <input class="input input-date" type="date" name="fecha" required>
-        <button class="btn-small btn-white now-btn" type="button" data-now="defectuosos">
-          <span>Ahora</span>
-        </button>
-      </div>
-
-      <div class="col-span actions-row">
-      <div class="col-span actions-row actions-split">
-        <div class="actions-left">
-          <button class="btn btn-white" type="button" data-export="defectuosos" data-format="xlsx" data-all="1">
-          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn btn-white" type="button" data-export="defectuosos" data-format="pdf" data-all="1">
-          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
-          <span>Exportar PDF</span>
-        </button>
-        </div>
-        <div class="actions-right">
-          <button class="btn btn-primary" type="submit">Registrar Descarte</button>
-        </div>
-      </div>
+<div class="card mt-lg" data-filter-scope="defectuosos">
+<div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
+<div class="actions-row">
+<input aria-label="Desde" class="input inline-edit" data-filter-from="defectuosos" type="date"/>
+<input aria-label="Hasta" class="input inline-edit" data-filter-to="defectuosos" type="date"/>
+<input class="input input-search" data-filter-q="defectuosos" placeholder="Buscar..." type="text"/>
+<input class="input input-qty" data-filter-min="defectuosos" min="0" placeholder="Min" step="1" type="number"/>
+<input class="input input-qty" data-filter-max="defectuosos" min="0" placeholder="Max" step="1" type="number"/>
+<select aria-label="Ordenar" class="input inline-edit select-compact" data-sort-scope="defectuosos">
+<option value="date_desc">Fecha (reciente)</option>
+<option value="date_asc">Fecha (antigua)</option>
+<option value="alpha_asc">A - Z</option>
+<option value="alpha_desc">Z - A</option>
+</select>
+<button class="btn-small btn-white" data-filter-apply="defectuosos" type="button">Filtrar</button>
+<button class="btn-small btn-white" data-filter-clear="defectuosos" type="button">Limpiar</button>
+<button class="btn-small btn-white" data-filter-all="defectuosos" type="button">Mostrar todo</button>
+<span class="tag">Registros: <b id="count-defectuosos">0</b></span>
+<button class="btn-small btn-white" data-export="defectuosos" data-format="xlsx" type="button">
+<span>Exportar Excel</span>
+</button>
+<button class="btn-small btn-white" data-export="defectuosos" data-format="pdf" type="button">
+<span>Exportar PDF</span>
+</button>
+</div>
+</div>
+<div class="card mt-lg">
+<table class="table" data-table="defectuosos">
+<thead>
+<tr>
+<th>Fecha</th>
+<th class="col-tipo">Tipo</th>
+<th>Cantidad</th>
+<th>Unidad</th>
+<th>Razón</th>
+<th>Acciones</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+</section>
+<!-- ENVÍOS -->
+<!-- MAQUINARIA (solo supervisor) -->
+<section class="section only-supervisor" id="maquinaria">
+<h3 class="panel-title">Maquinaria</h3>
+<form class="card form vertical" id="maquinariaForm">
+<div class="actions-row">
+<select class="input inline-edit" id="maq_maquina" required="">
+<option value="">Máquina...</option>
+<option>Máquina 1</option>
+<option>Máquina 2</option>
+<option>Máquina 3</option>
+<option>Máquina 4</option>
+<option>Máquina 5</option>
+</select>
+<select class="input inline-edit" id="maq_servicio" required="">
+<option value="">Servicio...</option>
+<option value="reparacion">Reparación</option>
+<option value="mantenimiento">Mantenimiento</option>
+<option value="averia">Avería</option>
+<option value="__custom__">Agregar servicio</option>
+</select>
+<input class="input inline-edit" id="maq_servicio_custom" placeholder="Servicio" style="display:none;"/>
+<div class="date-now">
+<input class="input inline-edit" id="maq_fecha" required="" type="datetime-local"/>
+<button class="btn-small btn-white now-btn" type="button">Ahora</button>
+</div>
+</div>
+<div class="actions-row">
+<input class="input inline-edit" id="maq_desc" placeholder="Descripción / estado"/>
+<button class="btn" id="maqSubmit" type="submit">Registrar</button>
 </div>
 </form>
-
-
-    <div class="card mt-lg" data-filter-scope="defectuosos">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="defectuosos" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="defectuosos" aria-label="Hasta">
-
-        
-        <input class="input input-search" type="text" data-filter-q="defectuosos" placeholder="Buscar...">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="defectuosos" placeholder="Min">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="defectuosos" placeholder="Max">
-        <select class="input inline-edit select-compact" data-sort-scope="defectuosos" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-
-<button class="btn-small btn-white" type="button" data-filter-apply="defectuosos">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="defectuosos">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="defectuosos">Mostrar todo</button>
-
-        <span class="tag">Registros: <b id="count-defectuosos">0</b></span>
-
-        <button class="btn-small btn-white" type="button" data-export="defectuosos" data-format="xlsx">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn-small btn-white" type="button" data-export="defectuosos" data-format="pdf">
-          <span>Exportar PDF</span>
-        </button>
-      </div>
-    </div>
-
-    <div class="card mt-lg">
-      <table class="table" data-table="defectuosos">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th class="col-tipo">Tipo</th>
-            <th>Cantidad</th>
-            <th>Unidad</th>
-            <th>Razón</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- ENVÍOS -->
-  <section class="section" id="envios">
-    <h3 class="panel-title">Envío de Productos Terminados</h3>
-
-    <form class="form two-col card" data-form="envios">
-<input class="input input-qty" placeholder="Cantidad" name="cantidad" type="number" min="1" required>
-      <select class="input input-unit" name="unidad" required>
-        <option value="kg">Kilogramos</option>
-        <option value="cajas">Cajas</option>
-        <option value="unidades">Unidades</option>
-      </select>
-
-      <input class="input col-span" placeholder="Tipo (ej: Rollos PEAD)" name="tipo" required>
-
-      <input class="input input-detalle" placeholder="Detalle del tipo (texto)" name="descripcion">
-      <input class="input input-cliente" placeholder="Cliente" name="cliente" required>
-
-      <div class="date-row col-span">
-        <input class="input input-date" type="date" name="fecha" required>
-        <button class="btn-small btn-white now-btn" type="button" data-now="envios">
-          <span>Ahora</span>
-        </button>
-      </div>
-
-      <div class="col-span actions-row">
-      <div class="col-span actions-row actions-split">
-        <div class="actions-left">
-          <button class="btn btn-white" type="button" data-export="envios" data-format="xlsx" data-all="1">
-          <img src="./assets/img/icon_excel.svg" alt="" class="icon-img">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn btn-white" type="button" data-export="envios" data-format="pdf" data-all="1">
-          <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img">
-          <span>Exportar PDF</span>
-        </button>
-        </div>
-        <div class="actions-right">
-          <button class="btn btn-primary" type="submit">Registrar Envío</button>
-        </div>
-      </div>
+<div class="actions-row mt-sm" style="justify-content:flex-end; gap:8px;">
+<button class="btn-small btn-white" data-all="1" data-export="maquinaria" data-format="xlsx" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_excel.svg"/> Exportar Excel
+	      </button>
+<button class="btn-small btn-white" data-all="1" data-export="maquinaria" data-format="pdf" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_pdf.svg"/> Exportar PDF
+	      </button>
+<span class="tag" id="count-maquinaria">0</span>
+</div>
+<div class="card mt-lg" data-filter-scope="maquinaria">
+<div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
+<div class="actions-row">
+<input aria-label="Desde" class="input inline-edit" data-filter-from="maquinaria" type="date"/>
+<input aria-label="Hasta" class="input inline-edit" data-filter-to="maquinaria" type="date"/>
+<input class="input input-search" data-filter-q="maquinaria" placeholder="Buscar..." type="text"/>
+<select aria-label="Ordenar" class="input inline-edit select-compact" data-sort-scope="maquinaria">
+<option value="date_desc">Fecha (reciente)</option>
+<option value="date_asc">Fecha (antigua)</option>
+<option value="alpha_asc">A - Z</option>
+<option value="alpha_desc">Z - A</option>
+</select>
+<button class="btn-small btn-white" data-filter-apply="maquinaria" type="button">Filtrar</button>
+<button class="btn-small btn-white" data-filter-clear="maquinaria" type="button">Limpiar</button>
+<button class="btn-small btn-white" data-filter-all="maquinaria" type="button">Mostrar todo</button>
+</div>
+</div>
+<div class="card mt-lg">
+<table class="table" data-table="maquinaria" id="maquinariaTable">
+<thead>
+<tr>
+<th>Fecha</th>
+<th>Máquina</th>
+<th>Servicio</th>
+<th>Descripción</th>
+<th>Acciones</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+</section>
+<!-- REPUESTOS E INVENTARIO (solo supervisor) -->
+<section class="section only-supervisor" id="repuestos">
+<h3 class="panel-title">Repuestos e Inventario</h3>
+<form class="card form vertical" id="repuestosForm">
+<div class="actions-row">
+<select class="input inline-edit" id="rep_repuesto" required="">
+<option value="">Repuesto...</option>
+<option value="calentador">Calentador</option>
+<option value="resistencia">Resistencia</option>
+<option value="rodamiento">Rodamiento</option>
+<option value="boquilla">Boquilla</option>
+<option value="__custom__">Agregar repuesto</option>
+</select>
+<input class="input inline-edit" id="rep_repuesto_custom" placeholder="Repuesto" style="display:none;"/>
+<input class="input inline-edit" id="rep_cantidad" min="0" placeholder="Cantidad" required="" type="number"/>
+<div class="date-now">
+<input class="input inline-edit" id="rep_fecha" required="" type="date"/>
+<button class="btn-small btn-white now-btn" type="button">Hoy</button>
+</div>
+</div>
+<div class="actions-row">
+<input class="input inline-edit" id="rep_obs" placeholder="Descripción"/>
+<button class="btn" id="repSubmit" type="submit">Registrar</button>
 </div>
 </form>
-
-    <!-- Filtro por rango de fechas + contador + exportaciones -->
-    <div class="card mt-lg" data-filter-scope="envios">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Restringir búsqueda</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="envios" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="envios" aria-label="Hasta">
-
-        
-        <input class="input input-search" type="text" data-filter-q="envios" placeholder="Buscar...">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-min="envios" placeholder="Min">
-        <input class="input input-qty" type="number" min="0" step="1" data-filter-max="envios" placeholder="Max">
-        <select class="input inline-edit select-compact" data-sort-scope="envios" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-
-<button class="btn-small btn-white" type="button" data-filter-apply="envios">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="envios">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="envios">Mostrar todo</button>
-
-        <span class="tag">Registros: <b id="count-envios">0</b></span>
-
-        <button class="btn-small btn-white" type="button" data-export="envios" data-format="xlsx">
-          <span>Exportar Excel</span>
-        </button>
-        <button class="btn-small btn-white" type="button" data-export="envios" data-format="pdf">
-          <span>Exportar PDF</span>
-        </button>
-      </div>
-    </div>
-
-    <div class="card mt-lg">
-      <table class="table" data-table="envios">
-        <thead>
-          <tr>
-            <th>Fecha</th>
-            <th>Cliente</th>
-            <th class="col-tipo">Tipo</th>
-            <th class="col-detalle">Detalle</th>
-            <th>Cantidad</th>
-            <th>Unidad</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-	  <!-- MAQUINARIA (solo supervisor) -->
-	  <section class="section only-supervisor" id="maquinaria">
-	    <h3 class="panel-title">Maquinaria</h3>
-	        <form class="card form vertical" id="maquinariaForm">
-      <div class="actions-row">
-        <select id="maq_maquina" class="input inline-edit" required>
-          <option value="">Máquina...</option>
-          <option>Máquina 1</option>
-          <option>Máquina 2</option>
-          <option>Máquina 3</option>
-          <option>Máquina 4</option>
-          <option>Máquina 5</option>
-        </select>
-        <select id="maq_servicio" class="input inline-edit" required>
-          <option value="">Servicio...</option>
-          <option value="reparacion">Reparación</option>
-          <option value="mantenimiento">Mantenimiento</option>
-          <option value="averia">Avería</option>
-          <option value="__custom__">Agregar servicio</option>
-        </select>
-	        <input id="maq_servicio_custom" class="input inline-edit" placeholder="Servicio" style="display:none;" />
-        <div class="date-now">
-          <input id="maq_fecha" type="datetime-local" class="input inline-edit" required />
-          <button class="btn-small btn-white now-btn" type="button">Ahora</button>
-        </div>
-      </div>
-      <div class="actions-row">
-        <input id="maq_desc" class="input inline-edit" placeholder="Descripción / estado" />
-        <button class="btn" id="maqSubmit" type="submit">Registrar</button>
-      </div>
-    </form>
-
-    <div class="actions-row mt-sm" style="justify-content:flex-end; gap:8px;">
-	      <button class="btn-small btn-white" type="button" data-export="maquinaria" data-format="xlsx" data-all="1">
-	        <img src="./assets/img/icon_excel.svg" alt="" class="icon-img"> Exportar Excel
+<div class="actions-row mt-sm" style="justify-content:flex-end; gap:8px;">
+<button class="btn-small btn-white" data-all="1" data-export="repuestos" data-format="xlsx" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_excel.svg"/> Exportar Excel
 	      </button>
-	      <button class="btn-small btn-white" type="button" data-export="maquinaria" data-format="pdf" data-all="1">
-	        <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img"> Exportar PDF
+<button class="btn-small btn-white" data-all="1" data-export="repuestos" data-format="pdf" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_pdf.svg"/> Exportar PDF
 	      </button>
-	      <span class="tag" id="count-maquinaria">0</span>
-	    </div>
-
-	    <div class="card mt-lg" data-filter-scope="maquinaria">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="maquinaria" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="maquinaria" aria-label="Hasta">
-        <input class="input input-search" type="text" data-filter-q="maquinaria" placeholder="Buscar...">
-        <select class="input inline-edit select-compact" data-sort-scope="maquinaria" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-        <button class="btn-small btn-white" type="button" data-filter-apply="maquinaria">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="maquinaria">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="maquinaria">Mostrar todo</button>
-      </div>
-    </div>
-
-    <div class="card mt-lg">
-	      <table class="table" id="maquinariaTable" data-table="maquinaria">
-	        <thead>
-	          <tr>
-	            <th>Fecha</th>
-	            <th>Máquina</th>
-	            <th>Servicio</th>
-	            <th>Descripción</th>
-            <th>Acciones</th>
-          </tr>
-	        </thead>
-	        <tbody></tbody>
-	      </table>
-	    </div>
-	  </section>
-
-	  <!-- REPUESTOS E INVENTARIO (solo supervisor) -->
-	  <section class="section only-supervisor" id="repuestos">
-	    <h3 class="panel-title">Repuestos e Inventario</h3>
-	        <form class="card form vertical" id="repuestosForm">
-      <div class="actions-row">
-        <select id="rep_repuesto" class="input inline-edit" required>
-          <option value="">Repuesto...</option>
-          <option value="calentador">Calentador</option>
-          <option value="resistencia">Resistencia</option>
-          <option value="rodamiento">Rodamiento</option>
-          <option value="boquilla">Boquilla</option>
-          <option value="__custom__">Agregar repuesto</option>
-        </select>
-	        <input id="rep_repuesto_custom" class="input inline-edit" placeholder="Repuesto" style="display:none;" />
-        <input id="rep_cantidad" type="number" class="input inline-edit" placeholder="Cantidad" min="0" required />
-        <div class="date-now">
-          <input id="rep_fecha" type="date" class="input inline-edit" required />
-          <button class="btn-small btn-white now-btn" type="button">Hoy</button>
-        </div>
-      </div>
-      <div class="actions-row">
-	        <input id="rep_obs" class="input inline-edit" placeholder="Descripción" />
-        <button class="btn" id="repSubmit" type="submit">Registrar</button>
-      </div>
-    </form>
-
-    <div class="actions-row mt-sm" style="justify-content:flex-end; gap:8px;">
-	      <button class="btn-small btn-white" type="button" data-export="repuestos" data-format="xlsx" data-all="1">
-	        <img src="./assets/img/icon_excel.svg" alt="" class="icon-img"> Exportar Excel
-	      </button>
-	      <button class="btn-small btn-white" type="button" data-export="repuestos" data-format="pdf" data-all="1">
-	        <img src="./assets/img/icon_pdf.svg" alt="" class="icon-img"> Exportar PDF
-	      </button>
-	      <span class="tag" id="count-repuestos">0</span>
-	    </div>
-
-	    <div class="card mt-lg" data-filter-scope="repuestos">
-      <div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
-      <div class="actions-row">
-        <input class="input inline-edit" type="date" data-filter-from="repuestos" aria-label="Desde">
-        <input class="input inline-edit" type="date" data-filter-to="repuestos" aria-label="Hasta">
-        <input class="input input-search" type="text" data-filter-q="repuestos" placeholder="Buscar...">
-        <select class="input inline-edit select-compact" data-sort-scope="repuestos" aria-label="Ordenar">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-        </select>
-        <button class="btn-small btn-white" type="button" data-filter-apply="repuestos">Filtrar</button>
-        <button class="btn-small btn-white" type="button" data-filter-clear="repuestos">Limpiar</button>
-        <button class="btn-small btn-white" type="button" data-filter-all="repuestos">Mostrar todo</button>
-      </div>
-    </div>
-
-    <div class="card mt-lg">
-	      <table class="table" id="repuestosTable" data-table="repuestos">
-	        <thead>
-	          <tr>
-	            <th>Fecha</th>
-	            <th>Repuesto</th>
-	            <th>Cantidad</th>
-	            <th>Descripción</th>
-	            <th>Estado</th>
-            <th>Acciones</th>
-          </tr>
-	        </thead>
-	        <tbody></tbody>
-	      </table>
-	    </div>
-	  </section>
-
-  <!-- OPCIONES AVANZADAS (solo supervisor) -->
-
-
-  <!-- ALMACÉN PRO: trazabilidad, códigos de barra, kardex y producción -->
-  <section class="section only-supervisor" id="almacen-pro">
-    <div class="section-heading">
-      <div>
-        <h3 class="panel-title">Almacén Pro y Trazabilidad</h3>
-        <p class="subtitle">Control de materiales por código de barra, stock mínimo/crítico, proveedores, clientes, kardex, conteo físico, productos terminados y órdenes de producción.</p>
-      </div>
-    </div>
-
-    <div class="pro-kpi-grid mt-lg">
-      <div class="pro-kpi card"><span>Materiales</span><strong id="proKpiMateriales">0</strong></div>
-      <div class="pro-kpi card"><span>Stock crítico</span><strong id="proKpiCritico">0</strong></div>
-      <div class="pro-kpi card"><span>Stock bajo</span><strong id="proKpiBajo">0</strong></div>
-      <div class="pro-kpi card"><span>Órdenes abiertas</span><strong id="proKpiOP">0</strong></div>
-    </div>
-
-    <div class="card mt-lg barcode-console">
-      <h4 class="pro-title">Escaneo rápido con lectora / pistola de código de barras</h4>
-      <p class="subtitle">La lectora funciona como teclado: enfoca este campo, escanea la etiqueta y presiona Enter automáticamente. También puedes escribir el código manualmente.</p>
-      <div class="pro-form-grid">
-        <input class="input barcode-input" id="proScanCode" placeholder="Escanear o escribir código de barra">
-        <select class="input" id="proScanAccion">
-          <option value="entrada">Entrada / recepción</option>
-          <option value="salida">Salida / consumo</option>
-          <option value="ajuste">Ajuste directo</option>
-        </select>
-        <input class="input" id="proScanCantidad" type="number" min="1" value="1" placeholder="Cantidad">
-        <input class="input" id="proScanObs" placeholder="Observación / referencia">
-        <button class="btn btn-primary" type="button" id="proBtnMovimiento">Registrar movimiento</button>
-      </div>
-      <p class="subtitle mt-sm" id="proScanStatus"></p>
-    </div>
-
-    <div class="pro-tabs mt-lg">
-      <button class="btn-small pro-tab active" type="button" data-pro-tab="materiales">Materiales</button>
-      <button class="btn-small pro-tab" type="button" data-pro-tab="kardex">Kardex</button>
-      <button class="btn-small pro-tab" type="button" data-pro-tab="conteo">Conteo físico</button>
-      <button class="btn-small pro-tab" type="button" data-pro-tab="proveedores">Proveedores</button>
-      <button class="btn-small pro-tab" type="button" data-pro-tab="clientes">Clientes</button>
-      <button class="btn-small pro-tab" type="button" data-pro-tab="terminados">Productos terminados</button>
-      <button class="btn-small pro-tab" type="button" data-pro-tab="ordenes">Órdenes producción</button>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="materiales">
-      <div class="card mt-lg">
-        <h4 class="pro-title">Catálogo de materiales trazables</h4>
-        <form class="pro-form-grid" id="proMaterialForm">
-          <input type="hidden" name="id">
-          <input class="input" name="codigo_barra" placeholder="Código de barra / etiqueta">
-          <input class="input" name="tipo" placeholder="Nombre del material" required>
-          <input class="input" name="categoria" placeholder="Categoría">
-          <input class="input" name="etiqueta" placeholder="Etiqueta / lote">
-          <input class="input" name="unidad" placeholder="Unidad: kg, m, und, caja">
-          <input class="input" name="ubicacion" placeholder="Ubicación: almacén, rack, zona">
-          <input class="input" name="stock_inicial" type="number" min="0" placeholder="Stock inicial">
-          <input class="input" name="stock_min" type="number" min="0" placeholder="Stock mínimo">
-          <input class="input" name="stock_crit" type="number" min="0" placeholder="Stock crítico">
-          <input class="input" name="costo_unitario" type="number" min="0" step="0.01" placeholder="Costo unitario S/">
-          <select class="input" name="proveedor_id" id="proMaterialProveedor"><option value="">Proveedor</option></select>
-          <button class="btn btn-primary" type="submit">Guardar material</button>
-        </form>
-      </div>
-      <div class="card mt-lg">
-        <div class="actions-row"><input class="input input-search" id="proMaterialSearch" placeholder="Buscar material, código, categoría o ubicación"><button class="btn-small btn-white" id="proRefreshMateriales" type="button">Actualizar</button></div>
-        <div class="table-scroll"><table class="table pro-table" id="proMaterialTable"><thead><tr><th>Código</th><th>Material</th><th>Stock</th><th>Estado</th><th>Unidad</th><th>Ubicación</th><th>Proveedor</th><th>Acción</th></tr></thead><tbody></tbody></table></div>
-      </div>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="kardex" style="display:none;">
-      <div class="card mt-lg">
-        <h4 class="pro-title">Kardex por material / código</h4>
-        <div class="actions-row"><input class="input input-search" id="proKardexSearch" placeholder="Buscar por código, material o referencia"><button class="btn-small btn-white" id="proRefreshKardex" type="button">Actualizar</button></div>
-        <div class="table-scroll"><table class="table pro-table" id="proKardexTable"><thead><tr><th>Fecha</th><th>Código</th><th>Material</th><th>Movimiento</th><th>Entrada</th><th>Salida</th><th>Saldo</th><th>Usuario</th><th>Obs.</th></tr></thead><tbody></tbody></table></div>
-      </div>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="conteo" style="display:none;">
-      <div class="card mt-lg">
-        <h4 class="pro-title">Recuento físico con código de barra</h4>
-        <form class="pro-form-grid" id="proConteoForm">
-          <input class="input barcode-input" name="codigo_barra" placeholder="Escanear código de barra">
-          <input class="input" name="tipo" placeholder="Material si no tiene código">
-          <input class="input" name="stock_fisico" type="number" min="0" placeholder="Stock físico contado" required>
-          <input class="input" name="motivo" placeholder="Motivo / observación">
-          <label class="tag"><input type="checkbox" name="aplicar_ajuste" value="1"> Aplicar ajuste al stock</label>
-          <button class="btn btn-primary" type="submit">Guardar conteo</button>
-        </form>
-        <p class="subtitle mt-sm" id="proConteoStatus"></p>
-      </div>
-      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proConteoTable"><thead><tr><th>Fecha</th><th>Código</th><th>Material</th><th>Sistema</th><th>Físico</th><th>Diferencia</th><th>Usuario</th><th>Motivo</th></tr></thead><tbody></tbody></table></div></div>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="proveedores" style="display:none;">
-      <div class="card mt-lg"><h4 class="pro-title">Proveedores</h4><form class="pro-form-grid" id="proProveedorForm"><input type="hidden" name="id"><input class="input" name="nombre" placeholder="Proveedor" required><input class="input" name="ruc" placeholder="RUC"><input class="input" name="telefono" placeholder="Teléfono"><input class="input" name="correo" placeholder="Correo"><input class="input" name="contacto" placeholder="Contacto"><input class="input" name="observaciones" placeholder="Observaciones"><button class="btn btn-primary" type="submit">Guardar proveedor</button></form></div>
-      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proProveedorTable"><thead><tr><th>Proveedor</th><th>RUC</th><th>Teléfono</th><th>Contacto</th><th>Correo</th></tr></thead><tbody></tbody></table></div></div>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="clientes" style="display:none;">
-      <div class="card mt-lg"><h4 class="pro-title">Clientes para envíos</h4><form class="pro-form-grid" id="proClienteForm"><input type="hidden" name="id"><input class="input" name="nombre" placeholder="Cliente" required><input class="input" name="documento" placeholder="RUC/DNI"><input class="input" name="telefono" placeholder="Teléfono"><input class="input" name="correo" placeholder="Correo"><input class="input" name="direccion" placeholder="Dirección"><input class="input" name="contacto" placeholder="Contacto"><input class="input" name="observaciones" placeholder="Observaciones"><button class="btn btn-primary" type="submit">Guardar cliente</button></form></div>
-      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proClienteTable"><thead><tr><th>Cliente</th><th>Documento</th><th>Teléfono</th><th>Contacto</th><th>Dirección</th></tr></thead><tbody></tbody></table></div></div>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="terminados" style="display:none;">
-      <div class="card mt-lg"><h4 class="pro-title">Productos terminados</h4><form class="pro-form-grid" id="proTerminadoForm"><input type="hidden" name="id"><input class="input" name="codigo_barra" placeholder="Código de barra"><input class="input" name="producto" placeholder="Producto terminado" required><input class="input" name="descripcion" placeholder="Descripción"><input class="input" name="unidad" placeholder="Unidad"><input class="input" name="stock" type="number" min="0" placeholder="Stock"><input class="input" name="stock_min" type="number" min="0" placeholder="Stock mínimo"><select class="input" name="cliente_id" id="proTerminadoCliente"><option value="">Cliente relacionado</option></select><button class="btn btn-primary" type="submit">Guardar producto</button></form></div>
-      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proTerminadoTable"><thead><tr><th>Código</th><th>Producto</th><th>Stock</th><th>Unidad</th><th>Cliente</th><th>Descripción</th></tr></thead><tbody></tbody></table></div></div>
-    </div>
-
-    <div class="pro-panel" data-pro-panel="ordenes" style="display:none;">
-      <div class="card mt-lg"><h4 class="pro-title">Órdenes de producción</h4><form class="pro-form-grid" id="proOrdenForm"><input type="hidden" name="id"><input class="input" name="codigo" placeholder="Código OP automático si se deja vacío"><input class="input" name="producto" placeholder="Producto a fabricar" required><input class="input" name="cantidad_planificada" type="number" min="0" placeholder="Cantidad planificada"><input class="input" name="cantidad_producida" type="number" min="0" placeholder="Cantidad producida"><select class="input" name="estado"><option>Pendiente</option><option>En proceso</option><option>Finalizada</option><option>Cancelada</option></select><input class="input" name="responsable" placeholder="Responsable"><input class="input" name="fecha" type="datetime-local"><input class="input" name="observacion" placeholder="Observación"><button class="btn btn-primary" type="submit">Guardar orden</button></form></div>
-      <div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proOrdenTable"><thead><tr><th>Código</th><th>Producto</th><th>Plan</th><th>Producido</th><th>Estado</th><th>Responsable</th><th>Fecha</th></tr></thead><tbody></tbody></table></div></div>
-    </div>
-  </section>
-
-  <section class="section only-supervisor" id="advanced">
-    <h3 class="panel-title">Opciones avanzadas</h3>
-
-    <!-- USUARIOS -->
-    <div class="card form vertical mt-sm">
-      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Gestión de Usuarios</h4>
-      <div class="actions-row">
-        <input id="nu_user" class="input inline-edit" placeholder="usuario">
-        <select id="nu_role" class="input inline-edit">
-          <option>operario</option>
-          <option>supervisor</option>
-          <option>administrador</option>
-        </select>
-
-        <input
-          id="nu_pass"
-          class="input inline-edit"
-          type="password"
-          placeholder="contraseña (opcional, por defecto definida por el sistema)"
-          autocomplete="new-password"
-        >
-        <button id="addUser" class="btn-small" type="button">
-          <img src="./assets/img/icon_users.svg" alt="" class="icon-img">
-          <span>Añadir</span>
-        </button>
-      </div>
-      <div class="actions-row" style="justify-content:flex-end; gap:8px; margin-top:10px;">
-        <select class="input inline-edit select-compact" data-sort-scope="users" aria-label="Ordenar usuarios">
-          <option value="alpha_asc">A - Z</option>
-          <option value="alpha_desc">Z - A</option>
-          <option value="date_desc">Creación (reciente)</option>
-          <option value="date_asc">Creación (antigua)</option>
-        </select>
-      </div>
-      <table class="table" id="usersTable">
-        <thead>
-          <tr>
-            <th>Usuario</th>
-            <th>Rol</th>
-            <th>Acciones</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <!-- BACKUP / RESTORE -->
-    <div class="card form vertical mt-lg">
-      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Backups y Restauración</h4>
-      <div class="actions-row actions-split">
-        <div class="actions-left">
-          <button id="btnDownloadBackup" class="btn btn-white" type="button">
-            <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
-            <span>Descargar backup (BD)</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="actions-row actions-split mt-sm">
-        <div class="actions-left">
-          <input id="backupFile" class="input inline-edit" type="file" accept=".db,application/octet-stream">
-          <button id="btnRestoreBackup" class="btn btn-white" type="button">
-            <img src="./assets/img/icon_backup.svg" alt="" class="icon-img">
-            <span>Restaurar backup</span>
-          </button>
-        </div>
-      </div>
-
-      <p class="subtitle mt-sm">
+<span class="tag" id="count-repuestos">0</span>
+</div>
+<div class="card mt-lg" data-filter-scope="repuestos">
+<div class="tag" style="margin-bottom:10px; display:inline-block;">Buscar y ordenar</div>
+<div class="actions-row">
+<input aria-label="Desde" class="input inline-edit" data-filter-from="repuestos" type="date"/>
+<input aria-label="Hasta" class="input inline-edit" data-filter-to="repuestos" type="date"/>
+<input class="input input-search" data-filter-q="repuestos" placeholder="Buscar..." type="text"/>
+<select aria-label="Ordenar" class="input inline-edit select-compact" data-sort-scope="repuestos">
+<option value="date_desc">Fecha (reciente)</option>
+<option value="date_asc">Fecha (antigua)</option>
+<option value="alpha_asc">A - Z</option>
+<option value="alpha_desc">Z - A</option>
+</select>
+<button class="btn-small btn-white" data-filter-apply="repuestos" type="button">Filtrar</button>
+<button class="btn-small btn-white" data-filter-clear="repuestos" type="button">Limpiar</button>
+<button class="btn-small btn-white" data-filter-all="repuestos" type="button">Mostrar todo</button>
+</div>
+</div>
+<div class="card mt-lg">
+<table class="table" data-table="repuestos" id="repuestosTable">
+<thead>
+<tr>
+<th>Fecha</th>
+<th>Repuesto</th>
+<th>Cantidad</th>
+<th>Descripción</th>
+<th>Estado</th>
+<th>Acciones</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+</section>
+<!-- OPCIONES AVANZADAS (solo supervisor) -->
+<!-- ALMACÉN PRO: trazabilidad, códigos de barra, kardex y producción -->
+<section class="section" id="almacen">
+<div class="section-heading">
+<div>
+<h3 class="panel-title">Almacén</h3>
+<p class="subtitle">Sistema empresarial para registrar entradas, dispensamientos, conteos físicos, productos terminados, órdenes y envíos con trazabilidad por código de barra o nombre.</p>
+</div>
+</div>
+<datalist id="proMaterialOptions"></datalist>
+<datalist id="proProductoOptions"></datalist>
+<div class="pro-kpi-grid mt-lg">
+<div class="pro-kpi card"><span>Materiales</span><strong id="proKpiMateriales">0</strong></div>
+<div class="pro-kpi card"><span>Stock bajo</span><strong id="proKpiBajo">0</strong></div>
+<div class="pro-kpi card"><span>Productos terminados</span><strong id="proKpiTerminados">0</strong></div>
+<div class="pro-kpi card"><span>Órdenes abiertas</span><strong id="proKpiOP">0</strong></div>
+</div>
+<div class="card mt-lg barcode-console">
+<h4 class="pro-title">Manejo rápido: escaneo, búsqueda por nombre y dispensamiento</h4>
+<p class="subtitle">La pistola de código de barra funciona como teclado. También puedes escribir el nombre del material o sus primeras letras; el sistema mostrará coincidencias registradas.</p>
+<div class="pro-form-grid">
+<input class="input barcode-input" id="proScanCode" list="proMaterialOptions" placeholder="Escanear código o escribir material"/>
+<select class="input" id="proScanAccion">
+<option value="entrada">Entrada / recepción</option>
+<option value="dispensamiento">Dispensamiento / salida</option>
+<option value="ajuste">Ajuste directo</option>
+</select>
+<input class="input" id="proScanCantidad" min="1" placeholder="Cantidad" type="number" value="1"/>
+<input class="input" id="proScanFecha" placeholder="Fecha" type="datetime-local"/>
+<input class="input" id="proScanObs" placeholder="Observación, guía, área o referencia"/>
+<button class="btn btn-primary" id="proBtnMovimiento" type="button">Registrar movimiento</button>
+</div>
+<p class="subtitle mt-sm" id="proScanStatus"></p>
+</div>
+<div class="pro-tabs mt-lg">
+<button class="btn-small pro-tab active" data-pro-tab="materiales" type="button">Materiales</button>
+<button class="btn-small pro-tab" data-pro-tab="kardex" type="button">Kardex</button>
+<button class="btn-small pro-tab" data-pro-tab="conteo" type="button">Conteo físico</button>
+<button class="btn-small pro-tab" data-pro-tab="proveedores" type="button">Proveedores</button>
+<button class="btn-small pro-tab" data-pro-tab="clientes" type="button">Clientes</button>
+<button class="btn-small pro-tab" data-pro-tab="terminados" type="button">Productos terminados</button>
+<button class="btn-small pro-tab" data-pro-tab="ordenes" type="button">Órdenes producción</button>
+<button class="btn-small pro-tab" data-pro-tab="envios-terminados" type="button">Envío productos terminados</button>
+</div>
+<div class="pro-panel" data-pro-panel="materiales">
+<div class="card mt-lg">
+<h4 class="pro-title">Catálogo de materiales</h4>
+<form class="pro-form-grid" id="proMaterialForm">
+<input name="id" type="hidden"/>
+<input class="input" name="codigo_barra" placeholder="Código de barra / etiqueta"/>
+<input class="input" list="proMaterialOptions" name="tipo" placeholder="Nombre del material" required=""/>
+<input class="input" name="categoria" placeholder="Categoría"/>
+<input class="input" name="etiqueta" placeholder="Lote"/>
+<select class="input" name="unidad" required=""><option value="">Unidad</option><option value="kilogramos">Kilogramos</option><option value="unidades">Unidades</option><option value="caja">Caja</option><option value="__add_unit__">Agregar unidad...</option></select>
+<input class="input" name="ubicacion" placeholder="Ubicación: almacén, rack, zona"/>
+<input class="input" min="0" name="stock_inicial" placeholder="Stock inicial" type="number"/>
+<input class="input" min="0" name="stock_min" placeholder="Stock mínimo" type="number"/>
+<select class="input" id="proMaterialProveedor" name="proveedor_id"><option value="">Proveedor</option></select>
+<button class="btn btn-primary" type="submit">Guardar material</button>
+</form>
+</div>
+<div class="card mt-lg">
+<div class="actions-row pro-filter-row">
+<input class="input input-search" id="proMaterialSearch" placeholder="Buscar por nombre, código, categoría, lote, ubicación o proveedor"/>
+<input class="input" id="proMaterialFrom" title="Desde" type="date"/>
+<input class="input" id="proMaterialTo" title="Hasta" type="date"/>
+<button class="btn-small btn-white" id="proRefreshMateriales" type="button">Filtrar</button>
+<button class="btn-small btn-white" data-pro-export-url="/api/pro/materiales.pdf" data-pro-filter="proMaterial" type="button">PDF</button>
+</div>
+<div class="table-scroll"><table class="table pro-table" id="proMaterialTable"><thead><tr><th>Código</th><th>Material</th><th>Stock</th><th>Estado</th><th>Unidad</th><th>Ubicación</th><th>Proveedor</th><th>Acción</th></tr></thead><tbody></tbody></table></div>
+</div>
+</div>
+<div class="pro-panel" data-pro-panel="kardex" style="display:none;">
+<div class="card mt-lg">
+<h4 class="pro-title">Kardex: trazabilidad de entradas, dispensamientos, ajustes y conteos</h4>
+<div class="actions-row pro-filter-row"><input class="input input-search" id="proKardexSearch" placeholder="Buscar por código, material, movimiento o referencia"/><input class="input" id="proKardexFrom" type="date"/><input class="input" id="proKardexTo" type="date"/><button class="btn-small btn-white" id="proRefreshKardex" type="button">Filtrar</button><button class="btn-small btn-white" data-pro-export-url="/api/pro/kardex.pdf" data-pro-filter="proKardex" type="button">PDF</button></div>
+<div class="table-scroll"><table class="table pro-table" id="proKardexTable"><thead><tr><th>Fecha</th><th>Código</th><th>Material</th><th>Movimiento</th><th>Entrada</th><th>Salida</th><th>Saldo</th><th>Usuario</th><th>Obs.</th></tr></thead><tbody></tbody></table></div>
+</div>
+</div>
+<div class="pro-panel" data-pro-panel="conteo" style="display:none;">
+<div class="card mt-lg">
+<h4 class="pro-title">Conteo físico</h4>
+<p class="subtitle">El conteo físico sirve para comparar lo que el sistema dice que hay contra lo que realmente se cuenta en almacén. Si hay diferencia, puedes dejar solo el registro como evidencia o marcar “Aplicar ajuste” para que el sistema actualice el stock al valor contado, dejando la trazabilidad en kardex.</p>
+<form class="pro-form-grid" id="proConteoForm">
+<input class="input barcode-input" list="proMaterialOptions" name="codigo_barra" placeholder="Escanear código o escribir material"/>
+<input class="input" min="0" name="stock_fisico" placeholder="Stock físico contado" required="" type="number"/>
+<input class="input" name="motivo" placeholder="Motivo / observación"/>
+<label class="tag"><input name="aplicar_ajuste" type="checkbox" value="1"/> Aplicar ajuste al stock</label>
+<button class="btn btn-primary" type="submit">Guardar conteo</button>
+</form>
+<p class="subtitle mt-sm" id="proConteoStatus"></p>
+</div>
+<div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proConteoTable"><thead><tr><th>Fecha</th><th>Código</th><th>Material</th><th>Sistema</th><th>Físico</th><th>Diferencia</th><th>Usuario</th><th>Motivo</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<div class="pro-panel" data-pro-panel="proveedores" style="display:none;">
+<div class="card mt-lg"><h4 class="pro-title">Proveedores</h4><form class="pro-form-grid" id="proProveedorForm"><input name="id" type="hidden"/><input class="input" name="nombre" placeholder="Proveedor" required=""/><input class="input" name="ruc" placeholder="RUC"/><input class="input" name="telefono" placeholder="Teléfono"/><input class="input" name="correo" placeholder="Correo"/><input class="input" name="contacto" placeholder="Contacto"/><input class="input" name="observaciones" placeholder="Observaciones"/><button class="btn btn-primary" type="submit">Guardar proveedor</button></form></div>
+<div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proProveedorTable"><thead><tr><th>Proveedor</th><th>RUC</th><th>Teléfono</th><th>Contacto</th><th>Correo</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<div class="pro-panel" data-pro-panel="clientes" style="display:none;">
+<div class="card mt-lg"><h4 class="pro-title">Clientes</h4><form class="pro-form-grid" id="proClienteForm"><input name="id" type="hidden"/><input class="input" name="nombre" placeholder="Cliente" required=""/><input class="input" name="documento" placeholder="RUC/DNI"/><input class="input" name="telefono" placeholder="Teléfono"/><input class="input" name="correo" placeholder="Correo"/><input class="input" name="direccion" placeholder="Dirección"/><input class="input" name="contacto" placeholder="Contacto"/><input class="input" name="observaciones" placeholder="Observaciones"/><button class="btn btn-primary" type="submit">Guardar cliente</button></form></div>
+<div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proClienteTable"><thead><tr><th>Cliente</th><th>Documento</th><th>Teléfono</th><th>Contacto</th><th>Dirección</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<div class="pro-panel" data-pro-panel="terminados" style="display:none;">
+<div class="card mt-lg"><h4 class="pro-title">Productos terminados</h4><p class="subtitle">Registra la cantidad producida. Si el producto ya existe, el sistema suma la nueva producción al stock acumulado y guarda el historial del movimiento.</p><form class="pro-form-grid" id="proTerminadoForm"><input name="id" type="hidden"/><input class="input" list="proProductoOptions" name="codigo_barra" placeholder="Código de barra"/><input class="input" list="proProductoOptions" name="producto" placeholder="Producto terminado" required=""/><input class="input" name="descripcion" placeholder="Descripción"/><select class="input" name="unidad" required=""><option value="">Unidad</option><option value="kilogramos">Kilogramos</option><option value="caja">Cajas</option><option value="unidades">Unidades</option><option value="__add_unit__">Agregar unidad...</option></select><input class="input" min="1" name="cantidad" placeholder="Cantidad producida" required="" type="number"/><select class="input" id="proTerminadoCliente" name="cliente_id"><option value="">Cliente relacionado</option></select><input class="input" name="fecha" type="datetime-local"/><input class="input" name="observacion" placeholder="Observación"/><button class="btn btn-primary" type="submit">Guardar producción</button></form></div>
+<div class="card mt-lg"><div class="actions-row pro-filter-row"><input class="input input-search" id="proTerminadoSearch" placeholder="Buscar producto, código o cliente"/><input class="input" id="proTerminadoFrom" type="date"/><input class="input" id="proTerminadoTo" type="date"/><button class="btn-small btn-white" id="proRefreshTerminados" type="button">Filtrar</button><button class="btn-small btn-white" data-pro-export-url="/api/pro/productos-terminados.pdf" data-pro-filter="proTerminado" type="button">PDF</button></div><div class="table-scroll"><table class="table pro-table" id="proTerminadoTable"><thead><tr><th>Código</th><th>Producto</th><th>Stock acumulado</th><th>Unidad</th><th>Cliente</th><th>Descripción</th></tr></thead><tbody></tbody></table></div></div>
+<div class="card mt-lg"><h4 class="pro-title">Historial de producción y movimientos</h4><div class="table-scroll"><table class="table pro-table" id="proTerminadoMovTable"><thead><tr><th>Fecha</th><th>Producto</th><th>Movimiento</th><th>Entrada</th><th>Salida</th><th>Saldo</th><th>Cliente</th><th>Obs.</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<div class="pro-panel" data-pro-panel="ordenes" style="display:none;">
+<div class="card mt-lg"><h4 class="pro-title">Órdenes de producción</h4><form class="pro-form-grid" id="proOrdenForm"><input name="id" type="hidden"/><input class="input" name="codigo" placeholder="Código OP automático si se deja vacío"/><input class="input" list="proProductoOptions" name="producto" placeholder="Producto a fabricar" required=""/><input class="input" min="0" name="cantidad_planificada" placeholder="Cantidad planificada" type="number"/><input class="input" min="0" name="cantidad_producida" placeholder="Cantidad producida" type="number"/><select class="input" name="estado"><option>Pendiente</option><option>En proceso</option><option>Finalizada</option><option>Cancelada</option></select><input class="input" name="fecha_inicio" placeholder="Fecha inicio" type="date"/><input class="input" name="fecha_final" placeholder="Fecha final" type="date"/><input class="input" name="observacion" placeholder="Observación"/><button class="btn btn-primary" type="submit">Guardar orden</button></form></div>
+<div class="card mt-lg"><div class="table-scroll"><table class="table pro-table" id="proOrdenTable"><thead><tr><th>Código</th><th>Producto</th><th>Plan</th><th>Producido</th><th>Estado</th><th>Inicio</th><th>Final</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<div class="pro-panel" data-pro-panel="envios-terminados" style="display:none;">
+<div class="card mt-lg"><h4 class="pro-title">Envío de productos terminados</h4><p class="subtitle">Registra la cantidad enviada a un cliente. El sistema descuenta del stock acumulado del producto terminado y guarda el movimiento.</p><form class="pro-form-grid" id="proEnvioTerminadoForm"><input class="input" list="proProductoOptions" name="buscar" placeholder="Código o nombre del producto" required=""/><input class="input" min="1" name="cantidad" placeholder="Cantidad enviada" required="" type="number"/><select class="input" name="unidad"><option value="">Unidad</option><option value="kilogramos">Kilogramos</option><option value="caja">Cajas</option><option value="unidades">Unidades</option><option value="__add_unit__">Agregar unidad...</option></select><select class="input" id="proEnvioCliente" name="cliente_id"><option value="">Cliente</option></select><input class="input" name="fecha" type="datetime-local"/><input class="input" name="observacion" placeholder="Observación / guía"/><button class="btn btn-primary" type="submit">Registrar envío</button></form><p class="subtitle mt-sm" id="proEnvioStatus"></p></div>
+<div class="card mt-lg"><div class="actions-row pro-filter-row"><input class="input input-search" id="proEnvioSearch" placeholder="Buscar producto, código o cliente"/><input class="input" id="proEnvioFrom" type="date"/><input class="input" id="proEnvioTo" type="date"/><button class="btn-small btn-white" id="proRefreshEnvios" type="button">Filtrar</button><button class="btn-small btn-white" data-pro-export-url="/api/pro/envios-terminados.pdf" data-pro-filter="proEnvio" type="button">PDF</button></div><div class="table-scroll"><table class="table pro-table" id="proEnvioTable"><thead><tr><th>Fecha</th><th>Código</th><th>Producto</th><th>Cliente</th><th>Cantidad</th><th>Unidad</th><th>Usuario</th><th>Obs.</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+</section>
+<section class="section only-supervisor" id="advanced">
+<h3 class="panel-title">Opciones avanzadas</h3>
+<!-- USUARIOS -->
+<div class="card form vertical mt-sm">
+<h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Gestión de Usuarios</h4>
+<div class="actions-row">
+<input class="input inline-edit" id="nu_user" placeholder="usuario"/>
+<select class="input inline-edit" id="nu_role">
+<option>operario</option>
+<option>supervisor</option>
+<option>administrador</option>
+</select>
+<input autocomplete="new-password" class="input inline-edit" id="nu_pass" placeholder="contraseña (opcional, por defecto definida por el sistema)" type="password"/>
+<button class="btn-small" id="addUser" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_users.svg"/>
+<span>Añadir</span>
+</button>
+</div>
+<div class="actions-row" style="justify-content:flex-end; gap:8px; margin-top:10px;">
+<select aria-label="Ordenar usuarios" class="input inline-edit select-compact" data-sort-scope="users">
+<option value="alpha_asc">A - Z</option>
+<option value="alpha_desc">Z - A</option>
+<option value="date_desc">Creación (reciente)</option>
+<option value="date_asc">Creación (antigua)</option>
+</select>
+</div>
+<table class="table" id="usersTable">
+<thead>
+<tr>
+<th>Usuario</th>
+<th>Rol</th>
+<th>Acciones</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+<!-- BACKUP / RESTORE -->
+<div class="card form vertical mt-lg">
+<h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Backups y Restauración</h4>
+<div class="actions-row actions-split">
+<div class="actions-left">
+<button class="btn btn-white" id="btnDownloadBackup" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_backup.svg"/>
+<span>Descargar backup (BD)</span>
+</button>
+</div>
+</div>
+<div class="actions-row actions-split mt-sm">
+<div class="actions-left">
+<input accept=".db,application/octet-stream" class="input inline-edit" id="backupFile" type="file"/>
+<button class="btn btn-white" id="btnRestoreBackup" type="button">
+<img alt="" class="icon-img" src="./assets/img/icon_backup.svg"/>
+<span>Restaurar backup</span>
+</button>
+</div>
+</div>
+<p class="subtitle mt-sm">
         La restauración reemplaza la base de datos actual. Se recomienda descargar un backup antes de restaurar.
       </p>
-      <p id="backupStatus" class="subtitle mt-sm"></p>
-    </div>
-
-    <!-- HISTORIAL DE EVENTOS -->
-    <div class="card form vertical mt-lg">
-      <h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Historial de Eventos</h4>
-      <div class="actions-row">
-        <input id="ev_q" class="input inline-edit" placeholder="Buscar (usuario, acción, entidad...)">
-        <input id="ev_from" class="input inline-edit" type="date">
-        <input id="ev_to" class="input inline-edit" type="date">
-        <select id="ev_sort" class="input inline-edit select-compact" data-sort-scope="event_logs" aria-label="Ordenar eventos">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">Usuario A - Z</option>
-          <option value="alpha_desc">Usuario Z - A</option>
-        </select>
-        <button id="ev_apply" class="btn-small" type="button">Filtrar</button>
-        <button id="ev_refresh" class="btn-small btn-white" type="button">Actualizar</button>
-        <button id="ev_export_excel" class="btn-small btn-white" type="button">Descargar Excel</button>
-      </div>
-
-      <table class="table table-events" id="eventsTable">
-        <colgroup>
-        <col style="width:16%">
-        <col style="width:9%">
-        <col style="width:10%">
-        <col style="width:12%">
-        <col style="width:10%">
-        <col style="width:6%">
-        <col style="width:27%">
-        <col style="width:10%">
-        </colgroup>
-        <thead>
-          <tr>
-            <th>Fecha/Hora</th>
-            <th>Usuario</th>
-            <th>Rol</th>
-            <th>Acción</th>
-            <th>Entidad</th>
-            <th>ID</th>
-            <th>Detalle</th>
-            <th>IP</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-
-      <div class="actions-row mt-sm">
-        <button id="ev_prev" class="btn-small btn-white" type="button">Anterior</button>
-        <span id="ev_page" class="tag">1</span>
-        <button id="ev_next" class="btn-small btn-white" type="button">Siguiente</button>
-      </div>
-    </div>
-  </section>
+<p class="subtitle mt-sm" id="backupStatus"></p>
+</div>
+<!-- HISTORIAL DE EVENTOS -->
+<div class="card form vertical mt-lg">
+<h4 class="panel-title" style="font-size:16px; margin:0 0 10px;">Historial de Eventos</h4>
+<div class="actions-row">
+<input class="input inline-edit" id="ev_q" placeholder="Buscar (usuario, acción, entidad...)"/>
+<input class="input inline-edit" id="ev_from" type="date"/>
+<input class="input inline-edit" id="ev_to" type="date"/>
+<select aria-label="Ordenar eventos" class="input inline-edit select-compact" data-sort-scope="event_logs" id="ev_sort">
+<option value="date_desc">Fecha (reciente)</option>
+<option value="date_asc">Fecha (antigua)</option>
+<option value="alpha_asc">Usuario A - Z</option>
+<option value="alpha_desc">Usuario Z - A</option>
+</select>
+<button class="btn-small" id="ev_apply" type="button">Filtrar</button>
+<button class="btn-small btn-white" id="ev_refresh" type="button">Actualizar</button>
+<button class="btn-small btn-white" id="ev_export_excel" type="button">Descargar Excel</button>
+</div>
+<table class="table table-events" id="eventsTable">
+<colgroup>
+<col style="width:16%"/>
+<col style="width:9%"/>
+<col style="width:10%"/>
+<col style="width:12%"/>
+<col style="width:10%"/>
+<col style="width:6%"/>
+<col style="width:27%"/>
+<col style="width:10%"/>
+</colgroup>
+<thead>
+<tr>
+<th>Fecha/Hora</th>
+<th>Usuario</th>
+<th>Rol</th>
+<th>Acción</th>
+<th>Entidad</th>
+<th>ID</th>
+<th>Detalle</th>
+<th>IP</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+<div class="actions-row mt-sm">
+<button class="btn-small btn-white" id="ev_prev" type="button">Anterior</button>
+<span class="tag" id="ev_page">1</span>
+<button class="btn-small btn-white" id="ev_next" type="button">Siguiente</button>
+</div>
+</div>
+</section>
 </main>
 
-
-
-  <!-- MODAL: Historial de entradas (Recepción de Materiales) -->
-  <div class="modal-overlay" id="recepHistModal" style="display:none;">
-    <div class="modal-card">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title">Historial de entradas</div>
-          <div class="modal-subtitle" id="recepHistSub">Material: -</div>
-        </div>
-        <button class="btn-small btn-white" type="button" id="recepHistClose">Cerrar</button>
-      </div>
-
-      <div class="modal-summary">
-        <span class="tag">Actualizaciones: <b id="recepHistTimes">0</b></span>
-        <span class="tag">Total agregado: <b id="recepHistTotal">0</b></span>
-        <span class="tag">Último total: <b id="recepHistLast">0</b></span>
-        <select class="input inline-edit select-compact" data-sort-scope="recep_hist" aria-label="Ordenar historial">
-          <option value="date_desc">Fecha (reciente)</option>
-          <option value="date_asc">Fecha (antigua)</option>
-          <option value="alpha_asc">Acción A - Z</option>
-          <option value="alpha_desc">Acción Z - A</option>
-        </select>
-      </div>
-
-      <div class="modal-body">
-        <table class="table" id="recepHistTable">
-          <thead>
-            <tr>
-              <th class="col-date">Fecha/Hora</th>
-              <th>Acción</th>
-	              <th class="col-num">Cantidad</th>
-              <th class="col-num">Total</th>
-              <th>Fecha registro</th>
-              <th>Unidad</th>
-              <th class="col-etiqueta">Etiqueta</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <p class="subtitle mt-sm" id="recepHistEmpty" style="display:none;">No hay historial registrado para este material.</p>
-      </div>
-    </div>
-  </div>
-
-
 <script src="./assets/js/app.js?v=30"></script>
+<script src="./assets/js/dashboard-charts.js?v=1"></script>
 </body>
 </html>

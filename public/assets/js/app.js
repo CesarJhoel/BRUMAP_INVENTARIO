@@ -29,6 +29,12 @@ async function api(url, opt = {}) {
 // Formato de fecha para la tabla (DD-MM-YYYY [HH:MM])
 function formatDateForTable(value, withTime = false) {
   if (!value) return '';
+  const raw = String(value || '').trim();
+  // Las fechas puras de planificación (YYYY-MM-DD) no deben moverse por zona horaria.
+  if (!withTime && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split('-');
+    return `${d}-${m}-${y}`;
+  }
 
   // SQLite suele guardar UTC como 'YYYY-MM-DD HH:MM:SS'
   const parseSqliteTsUTC = (v) => {
@@ -2234,8 +2240,8 @@ function initMenuActiveAndSectionSwitch(){
   };
 
   const showByHash = (hash) => {
-    const id = String(hash || '').replace('#','') || 'recepciones';
-    const finalId = canShow(id) ? id : 'recepciones';
+    const id = String(hash || '').replace('#','') || 'dashboard';
+    const finalId = canShow(id) ? id : 'dashboard';
 
     sections.forEach(s => {
       s.style.display = (s.id === finalId) ? 'block' : 'none';
@@ -2257,7 +2263,7 @@ function initMenuActiveAndSectionSwitch(){
     });
   });
 
-  const initialHash = location.hash || (() => { try{ return localStorage.getItem('brumap_last_hash') || '#recepciones'; }catch(e){ return '#recepciones'; } })();
+  const initialHash = location.hash || (() => { try{ return localStorage.getItem('brumap_last_hash') || '#dashboard'; }catch(e){ return '#dashboard'; } })();
   showByHash(initialHash);
 }
 
@@ -2322,11 +2328,10 @@ if (themeBtn){
 }
 
 
-  // En algunos despliegues (reverse proxy / subpath) el pathname puede variar.
-  // Usamos un chequeo más flexible para asegurar que el panel inicialice.
-  if (String(location.pathname || '').endsWith('panel.html')) {
-  initPanel();
-}
+  // Inicializar panel cuando existe la interfaz principal, sin depender del pathname.
+  if (document.getElementById('dashboard') || document.getElementById('almacen')) {
+    initPanel().catch(err => console.error('Error inicializando panel:', err));
+  }
 });
 // ==========================================================
 // UI PRO BRUMAP - mejoras compatibles sin modificar backend
@@ -2350,16 +2355,17 @@ if (themeBtn){
   }
 
   async function refreshDashboardKpis(){
-    const map = [
-      ['kpiRecepciones','/api/recepciones'],
-      ['kpiStock','/api/stock'],
-      ['kpiProduccion','/api/produccion'],
-      ['kpiEnvios','/api/envios']
-    ];
-    for(const [id,url] of map){
-      const el = document.getElementById(id);
-      if(el) el.textContent = String(await safeCount(url));
-    }
+    try{
+      const d = await api('/api/pro/dashboard');
+      const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = String(v ?? '0'); };
+      set('kpiRecepciones', d.materiales || 0);
+      set('kpiStock', d.stock_bajo || 0);
+      set('kpiProduccion', d.productos_terminados || 0);
+      set('kpiEnvios', d.envios_30d || 0);
+      set('kpiAlertas', d.ordenes_abiertas || 0);
+      const sub = document.getElementById('kpiStockTotal');
+      if(sub) sub.textContent = 'Materiales bajo mínimo';
+    }catch(e){ console.warn('No se pudo actualizar KPIs de almacén', e); }
   }
 
   document.addEventListener('DOMContentLoaded', function(){
@@ -2377,7 +2383,7 @@ if (themeBtn){
     // Asegurar que dashboard sea visible como módulo permitido.
     setTimeout(function(){
       const dashLink = document.querySelector('.menu a[href="#dashboard"]');
-      if(dashLink && (!location.hash || location.hash === '#recepciones')){
+      if(dashLink && (!location.hash || location.hash === '#dashboard')){
         // No forzar si el usuario ya venía trabajando en recepción; solo cargar KPIs.
       }
       refreshDashboardKpis();
@@ -2391,25 +2397,33 @@ if (themeBtn){
 })();
 
 // =============================================================================
-// MÓDULO PRO: almacén, trazabilidad, códigos de barra, kardex y producción
+// MÓDULO ALMACÉN: trazabilidad, escaneo por pistola/nombre y productos terminados
 // =============================================================================
-(function initAlmacenProModule(){
+(function initAlmacenModule(){
   const $ = (s, root=document) => root.querySelector(s);
   const $$ = (s, root=document) => Array.from(root.querySelectorAll(s));
-  const val = (form, name) => (form && form.elements[name]) ? String(form.elements[name].value || '').trim() : '';
   const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v ?? ''); };
   const esc = (v) => String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const fmtNum = (v) => Number(v || 0).toLocaleString('es-PE');
+  const val = (id) => String(document.getElementById(id)?.value || '').trim();
+  const refreshDashboardGlobal = () => {
+    if (typeof window.refreshDashboardBrumap === 'function') {
+      window.refreshDashboardBrumap().catch(err => console.warn('No se pudo refrescar dashboard global', err));
+    }
+  };
 
   async function proApi(path, opt={}) { return api('/api/pro' + path, opt); }
 
-  async function refreshProDashboard(){
-    try{
-      const d = await proApi('/dashboard');
-      setText('proKpiMateriales', d.materiales || 0);
-      setText('proKpiCritico', d.stock_critico || 0);
-      setText('proKpiBajo', d.stock_bajo || 0);
-      setText('proKpiOP', d.ordenes_abiertas || 0);
-    }catch(e){ console.warn('No se pudo cargar dashboard PRO', e); }
+  function qsFrom(prefix){
+    const params = new URLSearchParams();
+    const q = val(prefix + 'Search');
+    const from = val(prefix + 'From');
+    const to = val(prefix + 'To');
+    if (q) params.set('q', q);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const s = params.toString();
+    return s ? '?' + s : '';
   }
 
   function renderRows(tbody, rows, cols, empty='Sin registros'){
@@ -2426,6 +2440,37 @@ if (themeBtn){
       tr.innerHTML = cols.map(fn => `<td>${fn(row)}</td>`).join('');
       tbody.appendChild(tr);
     });
+  }
+
+  function setDatalist(id, items, buildValues){
+    const dl = document.getElementById(id);
+    if(!dl) return;
+    const seen = new Set();
+    const values = [];
+    (items || []).forEach(item => {
+      (buildValues(item) || []).forEach(v => {
+        const s = String(v || '').trim();
+        if(!s || seen.has(s.toLowerCase())) return;
+        seen.add(s.toLowerCase());
+        values.push(s);
+      });
+    });
+    dl.innerHTML = values.slice(0, 400).map(v => `<option value="${esc(v)}"></option>`).join('');
+  }
+
+  async function refreshProDashboard(){
+    try{
+      const d = await proApi('/dashboard');
+      setText('proKpiMateriales', d.materiales || 0);
+      setText('proKpiBajo', d.stock_bajo || 0);
+      setText('proKpiTerminados', d.productos_terminados || 0);
+      setText('proKpiOP', d.ordenes_abiertas || 0);
+      setText('kpiRecepciones', d.materiales || 0);
+      setText('kpiStock', d.stock_bajo || 0);
+      setText('kpiProduccion', d.productos_terminados || 0);
+      setText('kpiEnvios', d.envios_30d || 0);
+      setText('kpiAlertas', d.ordenes_abiertas || 0);
+    }catch(e){ console.warn('No se pudo cargar dashboard de almacén', e); }
   }
 
   async function loadProveedores(){
@@ -2448,40 +2493,43 @@ if (themeBtn){
     renderRows($('#proClienteTable tbody'), items, [
       r=>esc(r.nombre), r=>esc(r.documento), r=>esc(r.telefono), r=>esc(r.contacto), r=>esc(r.direccion)
     ]);
-    const sel = $('#proTerminadoCliente');
-    if(sel){
-      const cur = sel.value;
-      sel.innerHTML = '<option value="">Cliente relacionado</option>' + items.map(r=>`<option value="${r.id}">${esc(r.nombre)}</option>`).join('');
-      sel.value = cur;
-    }
+    ['proTerminadoCliente','proEnvioCliente'].forEach(id => {
+      const sel = document.getElementById(id);
+      if(sel){
+        const cur = sel.value;
+        sel.innerHTML = `<option value="">${id === 'proEnvioCliente' ? 'Cliente' : 'Cliente relacionado'}</option>` + items.map(r=>`<option value="${r.id}">${esc(r.nombre)}</option>`).join('');
+        sel.value = cur;
+      }
+    });
   }
 
   async function loadMateriales(){
-    const q = encodeURIComponent($('#proMaterialSearch')?.value || '');
-    const data = await proApi('/materiales' + (q ? `?q=${q}` : ''));
+    const data = await proApi('/materiales' + qsFrom('proMaterial'));
     const items = data.items || [];
+    window.__ALMACEN_MATERIALES = items;
+    setDatalist('proMaterialOptions', items, r => [r.codigo_barra, r.tipo]);
     renderRows($('#proMaterialTable tbody'), items, [
-      r=>`<code>${esc(r.codigo_barra || '-')}</code>`,
-      r=>`<b>${esc(r.tipo)}</b><br><small>${esc(r.categoria || '')}</small>`,
-      r=>`<b>${esc(r.stock_actual || 0)}</b>`,
+      r=>`<button class="table-link" type="button" data-use-material="${esc(r.codigo_barra || r.tipo)}"><code>${esc(r.codigo_barra || '-')}</code></button>`,
+      r=>`<button class="table-link text-left" type="button" data-use-material="${esc(r.tipo)}"><b>${esc(r.tipo)}</b></button><br><small>${esc(r.categoria || '')}${r.etiqueta ? ' · Lote: ' + esc(r.etiqueta) : ''}</small>`,
+      r=>`<b>${fmtNum(r.stock_actual || 0)}</b>`,
       r=>`<span class="stock-pill stock-${String(r.estado_stock || 'OK').toLowerCase().replace('í','i')}">${esc(r.estado_stock || 'OK')}</span>`,
       r=>esc(r.unidad || ''),
       r=>esc(r.ubicacion || ''),
       r=>esc(r.proveedor || ''),
-      r=>`<button class="btn-small btn-white" type="button" data-fill-barcode="${esc(r.codigo_barra || '')}" data-fill-tipo="${esc(r.tipo)}" data-fill-unidad="${esc(r.unidad || '')}">Usar</button>`
+      r=>`<button class="btn-small btn-white" type="button" data-use-material="${esc(r.codigo_barra || r.tipo)}">Usar</button>`
     ]);
-    $$('#proMaterialTable [data-fill-barcode]').forEach(btn => {
+    $$('#proMaterialTable [data-use-material]').forEach(btn => {
       btn.addEventListener('click', () => {
-        $('#proScanCode').value = btn.dataset.fillBarcode || '';
-        $('#proScanObs').value = btn.dataset.fillTipo || '';
-        $('#proScanCantidad').focus();
+        const v = btn.dataset.useMaterial || '';
+        const input = $('#proScanCode');
+        if(input) { input.value = v; input.focus(); }
       });
     });
+    await refreshProDashboard();
   }
 
   async function loadKardex(){
-    const q = encodeURIComponent($('#proKardexSearch')?.value || '');
-    const data = await proApi('/kardex' + (q ? `?q=${q}` : ''));
+    const data = await proApi('/kardex' + qsFrom('proKardex'));
     renderRows($('#proKardexTable tbody'), data.items || [], [
       r=>esc(formatDateForTable(r.fecha || r.created_at, true)),
       r=>`<code>${esc(r.codigo_barra || '-')}</code>`,
@@ -2510,15 +2558,52 @@ if (themeBtn){
   }
 
   async function loadTerminados(){
-    const data = await proApi('/productos-terminados');
-    renderRows($('#proTerminadoTable tbody'), data.items || [], [
-      r=>`<code>${esc(r.codigo_barra || '-')}</code>`,
-      r=>esc(r.producto),
-      r=>`<b>${esc(r.stock || 0)}</b>`,
+    const data = await proApi('/productos-terminados' + qsFrom('proTerminado'));
+    const items = data.items || [];
+    window.__ALMACEN_TERMINADOS = items;
+    setDatalist('proProductoOptions', items, r => [r.codigo_barra, r.producto]);
+    renderRows($('#proTerminadoTable tbody'), items, [
+      r=>`<button class="table-link" type="button" data-fill-product="${esc(r.producto)}" data-fill-code="${esc(r.codigo_barra || '')}"><code>${esc(r.codigo_barra || '-')}</code></button>`,
+      r=>`<button class="table-link text-left" type="button" data-fill-product="${esc(r.producto)}" data-fill-code="${esc(r.codigo_barra || '')}"><b>${esc(r.producto)}</b></button>`,
+      r=>`<b>${fmtNum(r.stock || 0)}</b>`,
       r=>esc(r.unidad || ''),
       r=>esc(r.cliente || ''),
       r=>esc(r.descripcion || '')
     ]);
+    $$('#proTerminadoTable [data-fill-product]').forEach(btn => {
+      btn.addEventListener('click', () => fillProductoForm(btn.dataset.fillProduct || '', btn.dataset.fillCode || ''));
+    });
+    await loadTerminadoMovimientos();
+    await refreshProDashboard();
+  }
+
+  async function loadTerminadoMovimientos(){
+    const data = await proApi('/productos-terminados-movimientos' + qsFrom('proTerminado'));
+    renderRows($('#proTerminadoMovTable tbody'), data.items || [], [
+      r=>esc(formatDateForTable(r.fecha || r.created_at, true)),
+      r=>esc(r.producto),
+      r=>esc(r.movimiento),
+      r=>esc(r.entrada),
+      r=>esc(r.salida),
+      r=>`<b>${esc(r.saldo)}</b>`,
+      r=>esc(r.cliente || ''),
+      r=>esc(r.observacion || '')
+    ]);
+  }
+
+  async function loadEnviosTerminados(){
+    const data = await proApi('/envios-terminados' + qsFrom('proEnvio'));
+    renderRows($('#proEnvioTable tbody'), data.items || [], [
+      r=>esc(formatDateForTable(r.fecha || r.created_at, true)),
+      r=>`<code>${esc(r.codigo_barra || '-')}</code>`,
+      r=>esc(r.producto),
+      r=>esc(r.cliente || ''),
+      r=>esc(r.cantidad),
+      r=>esc(r.unidad || ''),
+      r=>esc(r.username || ''),
+      r=>esc(r.observacion || '')
+    ]);
+    await refreshProDashboard();
   }
 
   async function loadOrdenes(){
@@ -2529,70 +2614,105 @@ if (themeBtn){
       r=>esc(r.cantidad_planificada),
       r=>esc(r.cantidad_producida),
       r=>`<span class="tag">${esc(r.estado)}</span>`,
-      r=>esc(r.responsable || ''),
-      r=>esc(formatDateForTable(r.fecha || r.created_at, true))
+      r=>esc(formatDateForTable(r.fecha_inicio || r.fecha, false)),
+      r=>esc(formatDateForTable(r.fecha_final || '', false))
     ]);
+    await refreshProDashboard();
   }
 
-  function hookSimpleForm(formId, endpoint, after){
+  function fillProductoForm(producto, codigo){
+    const form = document.getElementById('proTerminadoForm');
+    if(!form) return;
+    if(form.elements.producto) form.elements.producto.value = producto || '';
+    if(form.elements.codigo_barra) form.elements.codigo_barra.value = codigo || '';
+    if(form.elements.cantidad) form.elements.cantidad.focus();
+  }
+
+  function hookSimpleForm(formId, endpoint, after, statusId){
     const form = document.getElementById(formId);
     if(!form) return;
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (window.__ROLE === 'operario') { alert('Solo visualización para Operario.'); return; }
       const payload = Object.fromEntries(new FormData(form).entries());
       try{
-        await proApi(endpoint, { method:'POST', body: payload });
+        const r = await proApi(endpoint, { method:'POST', body: payload });
         form.reset();
+        if(statusId) setText(statusId, r.stock_actual != null ? `Registrado. Stock actual: ${r.stock_actual}` : 'Registrado correctamente.');
         if(after) await after();
         await refreshProDashboard();
+        refreshDashboardGlobal();
       }catch(err){
         console.error(err);
-        alert('No se pudo guardar. Revisa que no estés duplicando código/nombre.');
+        const code = err.payload?.error || '';
+        if (code === 'stock-insuficiente') alert(`Stock insuficiente. Stock actual: ${err.payload.stock}`);
+        else if (code === 'material-not-found') alert('No se encontró el material. Regístralo en Catálogo de materiales o escribe más letras hasta que aparezca.');
+        else if (code === 'producto-not-found') alert('No se encontró el producto terminado. Regístralo primero en Productos terminados.');
+        else alert('No se pudo guardar. Revisa duplicados o datos incompletos.');
       }
     });
   }
 
   async function registerMovimiento(){
+    if (window.__ROLE === 'operario') { alert('Solo visualización para Operario.'); return; }
     const status = $('#proScanStatus');
     const payload = {
       codigo_barra: $('#proScanCode')?.value || '',
       accion: $('#proScanAccion')?.value || 'entrada',
       cantidad: $('#proScanCantidad')?.value || '1',
+      fecha: $('#proScanFecha')?.value || '',
       observacion: $('#proScanObs')?.value || ''
     };
-    if(!payload.codigo_barra && !payload.observacion){
-      alert('Escanea un código o escribe el material en observación para referencia.');
+    if(!payload.codigo_barra){
+      alert('Escanea un código o escribe el nombre del material.');
       return;
     }
     try{
       const r = await proApi('/movimiento', { method:'POST', body: payload });
-      if(status) status.textContent = `Movimiento registrado. Stock actual: ${r.stock_actual}`;
+      if(status) status.textContent = `Movimiento registrado para ${r.material || 'material'}. Stock actual: ${r.stock_actual}`;
       $('#proScanCode').value = '';
       $('#proScanCantidad').value = '1';
+      $('#proScanObs').value = '';
       $('#proScanCode').focus();
       await Promise.all([loadMateriales(), loadKardex(), refreshProDashboard()]);
+      refreshDashboardGlobal();
     }catch(err){
       console.error(err);
-      if(status) status.textContent = err.payload?.error === 'stock-insuficiente' ? `Stock insuficiente. Stock actual: ${err.payload.stock}` : 'No se pudo registrar el movimiento. Si el código no existe, crea primero el material.';
+      if(status) {
+        if(err.payload?.error === 'stock-insuficiente') status.textContent = `Stock insuficiente. Stock actual: ${err.payload.stock}`;
+        else if(err.payload?.error === 'material-not-found') status.textContent = 'No se encontró el material. Regístralo o escribe más letras hasta seleccionar una coincidencia.';
+        else status.textContent = 'No se pudo registrar el movimiento.';
+      }
     }
   }
 
+  async function loadTab(tab){
+    $$('.pro-panel').forEach(p => p.style.display = p.dataset.proPanel === tab ? '' : 'none');
+    $$('.pro-tab').forEach(b=>b.classList.toggle('active', b.dataset.proTab === tab));
+    if(tab==='materiales') await loadMateriales();
+    else if(tab==='kardex') await loadKardex();
+    else if(tab==='conteo') await loadConteos();
+    else if(tab==='proveedores') await loadProveedores();
+    else if(tab==='clientes') await loadClientes();
+    else if(tab==='terminados') await loadTerminados();
+    else if(tab==='ordenes') await loadOrdenes();
+    else if(tab==='envios-terminados') await loadEnviosTerminados();
+  }
+
   function initTabs(){
-    $$('.pro-tab').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        $$('.pro-tab').forEach(b=>b.classList.remove('active'));
-        btn.classList.add('active');
-        const tab = btn.dataset.proTab;
-        $$('.pro-panel').forEach(p => p.style.display = p.dataset.proPanel === tab ? '' : 'none');
-        if(tab==='materiales') await loadMateriales();
-        if(tab==='kardex') await loadKardex();
-        if(tab==='conteo') await loadConteos();
-        if(tab==='proveedores') await loadProveedores();
-        if(tab==='clientes') await loadClientes();
-        if(tab==='terminados') await loadTerminados();
-        if(tab==='ordenes') await loadOrdenes();
-      });
+    const tabsWrap = document.querySelector('.pro-tabs');
+    if(!tabsWrap || tabsWrap.dataset.bound === '1') return;
+    tabsWrap.dataset.bound = '1';
+    tabsWrap.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.pro-tab');
+      if(!btn) return;
+      e.preventDefault();
+      const tab = btn.dataset.proTab || 'materiales';
+      try { await loadTab(tab); }
+      catch(err) { console.error('Error cargando pestaña de almacén:', err); alert('No se pudo cargar esta pestaña. Revisa la conexión o permisos.'); }
     });
+    const active = document.querySelector('.pro-tab.active')?.dataset.proTab || 'materiales';
+    loadTab(active).catch(err => console.warn('No se pudo cargar pestaña inicial de almacén', err));
   }
 
   function initScannerHelpers(){
@@ -2606,43 +2726,86 @@ if (themeBtn){
         }
       });
     });
+    $('#proScanCode')?.addEventListener('input', debounce(loadMateriales, 250));
+  }
+
+  function debounce(fn, ms){
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args).catch?.(()=>{}), ms); };
+  }
+
+  function initFilters(){
+    const pairs = [
+      ['proRefreshMateriales', loadMateriales], ['proMaterialSearch', debounce(loadMateriales, 250)],
+      ['proRefreshKardex', loadKardex], ['proKardexSearch', debounce(loadKardex, 250)],
+      ['proRefreshTerminados', loadTerminados], ['proTerminadoSearch', debounce(loadTerminados, 250)],
+      ['proRefreshEnvios', loadEnviosTerminados], ['proEnvioSearch', debounce(loadEnviosTerminados, 250)]
+    ];
+    pairs.forEach(([id, fn]) => {
+      const el = document.getElementById(id);
+      if(!el) return;
+      const ev = el.tagName === 'INPUT' ? 'input' : 'click';
+      el.addEventListener(ev, e => { if(ev === 'click') e.preventDefault(); fn().catch(console.error); });
+    });
+    ['proMaterialFrom','proMaterialTo'].forEach(id => document.getElementById(id)?.addEventListener('change', () => loadMateriales().catch(console.error)));
+    ['proKardexFrom','proKardexTo'].forEach(id => document.getElementById(id)?.addEventListener('change', () => loadKardex().catch(console.error)));
+    ['proTerminadoFrom','proTerminadoTo'].forEach(id => document.getElementById(id)?.addEventListener('change', () => loadTerminados().catch(console.error)));
+    ['proEnvioFrom','proEnvioTo'].forEach(id => document.getElementById(id)?.addEventListener('change', () => loadEnviosTerminados().catch(console.error)));
+  }
+
+  function initProExports(){
+    $$('[data-pro-export-url]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const url = btn.dataset.proExportUrl;
+        const prefix = btn.dataset.proFilter || '';
+        const qs = prefix ? qsFrom(prefix) : '';
+        window.location.href = url + qs;
+      });
+    });
   }
 
   function init(){
-    if(!document.getElementById('almacen-pro')) return;
+    if(!document.getElementById('almacen')) return;
     initTabs();
     initScannerHelpers();
+    initFilters();
+    initProExports();
     hookSimpleForm('proProveedorForm','/proveedores', loadProveedores);
     hookSimpleForm('proClienteForm','/clientes', loadClientes);
     hookSimpleForm('proMaterialForm','/materiales', async()=>{ await loadMateriales(); await loadProveedores(); });
     hookSimpleForm('proTerminadoForm','/productos-terminados', loadTerminados);
     hookSimpleForm('proOrdenForm','/ordenes-produccion', loadOrdenes);
+    hookSimpleForm('proEnvioTerminadoForm','/envios-terminados', async()=>{ await loadEnviosTerminados(); await loadTerminados(); }, 'proEnvioStatus');
     const conteoForm = document.getElementById('proConteoForm');
     if(conteoForm){
       conteoForm.addEventListener('submit', async (e)=>{
         e.preventDefault();
+        if (window.__ROLE === 'operario') { alert('Solo visualización para Operario.'); return; }
         const payload = Object.fromEntries(new FormData(conteoForm).entries());
         try{
           const r = await proApi('/conteo', { method:'POST', body: payload });
           setText('proConteoStatus', `Conteo guardado. Sistema: ${r.stock_sistema}, físico: ${r.stock_fisico}, diferencia: ${r.diferencia}`);
           conteoForm.reset();
           await Promise.all([loadConteos(), loadMateriales(), loadKardex(), refreshProDashboard()]);
-        }catch(err){ console.error(err); setText('proConteoStatus','No se pudo guardar el conteo.'); }
+          refreshDashboardGlobal();
+        }catch(err){ console.error(err); setText('proConteoStatus','No se pudo guardar el conteo. Verifica que el material exista.'); }
       });
     }
     $('#proBtnMovimiento')?.addEventListener('click', registerMovimiento);
-    $('#proRefreshMateriales')?.addEventListener('click', loadMateriales);
-    $('#proRefreshKardex')?.addEventListener('click', loadKardex);
-    $('#proMaterialSearch')?.addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); loadMateriales(); }});
-    $('#proKardexSearch')?.addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); loadKardex(); }});
     refreshProDashboard();
     loadProveedores().catch(()=>{});
     loadClientes().catch(()=>{});
     loadMateriales().catch(()=>{});
+    loadTerminados().catch(()=>{});
+    refreshDashboardGlobal();
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
   window.refreshAlmacenPro = async function(){
-    await Promise.all([refreshProDashboard(), loadProveedores(), loadClientes(), loadMateriales(), loadKardex(), loadConteos(), loadTerminados(), loadOrdenes()]);
+    await Promise.all([refreshProDashboard(), loadProveedores(), loadClientes(), loadMateriales(), loadKardex(), loadConteos(), loadTerminados(), loadOrdenes(), loadEnviosTerminados()]);
   };
 })();

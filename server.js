@@ -283,22 +283,22 @@ async function seedUsersIfEmpty() {
       "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,?)",
       ['administrador', hpDefault, 'administrador', 0]
     );
-    console.log('Seeded users (bcrypt): operario/admin -> admin, supervisor protegido -> ' + PROTECTED_SUPERVISOR_PASSWORD);
+    console.log('Seeded users (bcrypt): usuarios iniciales creados. Cambia las contraseñas por defecto antes de producción.');
   }
 }
 
 await seedUsersIfEmpty();
 
-// Garantiza que el Supervisor protegido exista siempre (evita quedar sin acceso)
+// Garantiza que exista una cuenta supervisora protegida sin sobrescribir su contraseña.
+// La contraseña solo se usa cuando la cuenta todavía no existe; después no se fuerza en cada arranque.
 async function ensureProtectedSupervisor() {
   const row = await db.get(
     "SELECT id, username, password, role, is_protected FROM users WHERE LOWER(username)=LOWER(?) LIMIT 1",
     [PROTECTED_SUPERVISOR_USERNAME]
   );
 
-  const hpSupervisor = await bcrypt.hash(PROTECTED_SUPERVISOR_PASSWORD, 10);
-
   if (!row) {
+    const hpSupervisor = await bcrypt.hash(PROTECTED_SUPERVISOR_PASSWORD, 10);
     await db.run(
       "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,1)",
       [PROTECTED_SUPERVISOR_USERNAME, hpSupervisor, 'supervisor']
@@ -307,15 +307,13 @@ async function ensureProtectedSupervisor() {
     return;
   }
 
-  // Forzamos rol supervisor y protección
   const needsRole = String(row.role || '') !== 'supervisor';
   const needsProtected = Number(row.is_protected || 0) !== 1;
-  const pwOk = await bcrypt.compare(PROTECTED_SUPERVISOR_PASSWORD, String(row.password || ''));
 
-  if (needsRole || needsProtected || !pwOk) {
+  if (needsRole || needsProtected) {
     await db.run(
-      "UPDATE users SET role=?, is_protected=1, password=? WHERE id=?",
-      ['supervisor', hpSupervisor, row.id]
+      "UPDATE users SET role=?, is_protected=1 WHERE id=?",
+      ['supervisor', row.id]
     );
   }
 }
@@ -596,7 +594,7 @@ if (IS_PROD) {
       useDefaults: false,
       directives: {
         "default-src": ["'self'"],
-        "script-src": ["'self'"],
+        "script-src": ["'self'", "https://cdn.jsdelivr.net"],
         "style-src": ["'self'", "'unsafe-inline'"],
         "img-src": ["'self'", "data:"],
         "font-src": ["'self'", "data:"],
@@ -1766,11 +1764,11 @@ function formatPdfDateTime(s) {
   return formatDateTimeYmdToDmy(s);
 }
 
-function startPdf(res, filename, title) {
+function startPdf(res, filename, title, options = {}) {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  const doc = new PDFDocument({ size: 'A4', margin: 36 });
+  const doc = new PDFDocument({ size: 'A4', layout: options.layout || 'portrait', margin: 36 });
   doc.pipe(res);
 
   try {
@@ -2632,7 +2630,49 @@ CREATE TABLE IF NOT EXISTS pro_conteos_inventario(
   username TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS pro_productos_terminados_movimientos(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  producto_id INTEGER,
+  codigo_barra TEXT,
+  producto TEXT NOT NULL,
+  movimiento TEXT NOT NULL,
+  entrada INTEGER NOT NULL DEFAULT 0,
+  salida INTEGER NOT NULL DEFAULT 0,
+  saldo INTEGER NOT NULL DEFAULT 0,
+  unidad TEXT,
+  cliente_id INTEGER,
+  cliente TEXT,
+  referencia TEXT,
+  observacion TEXT,
+  username TEXT,
+  fecha TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pro_pt_mov_producto ON pro_productos_terminados_movimientos(producto);
+CREATE INDEX IF NOT EXISTS idx_pro_pt_mov_barcode ON pro_productos_terminados_movimientos(codigo_barra);
+CREATE TABLE IF NOT EXISTS pro_envios_terminados(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  producto_id INTEGER,
+  codigo_barra TEXT,
+  producto TEXT NOT NULL,
+  cantidad INTEGER NOT NULL DEFAULT 0,
+  unidad TEXT,
+  cliente_id INTEGER,
+  cliente TEXT,
+  observacion TEXT,
+  username TEXT,
+  fecha TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pro_envios_terminados_producto ON pro_envios_terminados(producto);
+CREATE INDEX IF NOT EXISTS idx_pro_envios_terminados_fecha ON pro_envios_terminados(fecha);
 `);
+
+// Migraciones no destructivas del módulo Almacén para bases de datos existentes
+await ensureColumn('pro_ordenes_produccion', 'fecha_inicio', 'TEXT');
+await ensureColumn('pro_ordenes_produccion', 'fecha_final', 'TEXT');
+await ensureColumn('pro_productos_terminados', 'activo', 'INTEGER NOT NULL DEFAULT 1');
 
 function safeText(v, max=255){ return String(v ?? '').trim().slice(0,max); }
 function safeInt(v, def=0){ const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : def; }
@@ -2641,6 +2681,56 @@ function nowLocalISO(){ return new Date().toISOString().slice(0,16); }
 async function getStockForTipo(tipo){
   const row = await db.get("SELECT cantidad FROM stock_productos WHERE LOWER(tipo)=LOWER(?) LIMIT 1", [tipo]);
   return safeInt(row?.cantidad, 0);
+}
+
+async function findMaterialByCodeOrName(value){
+  const q = safeText(value, 180);
+  if (!q) return null;
+  return await db.get(`
+    SELECT * FROM pro_materiales
+    WHERE activo=1 AND (
+      LOWER(COALESCE(codigo_barra,''))=LOWER(?)
+      OR LOWER(tipo)=LOWER(?)
+      OR LOWER(tipo) LIKE LOWER(?)
+    )
+    ORDER BY
+      CASE
+        WHEN LOWER(COALESCE(codigo_barra,''))=LOWER(?) THEN 0
+        WHEN LOWER(tipo)=LOWER(?) THEN 1
+        ELSE 2
+      END,
+      tipo ASC
+    LIMIT 1`, [q, q, `${q}%`, q, q]);
+}
+
+async function findProductoTerminadoByCodeOrName(value){
+  const q = safeText(value, 180);
+  if (!q) return null;
+  return await db.get(`
+    SELECT pt.*, c.nombre AS cliente
+    FROM pro_productos_terminados pt
+    LEFT JOIN pro_clientes c ON c.id=pt.cliente_id
+    WHERE COALESCE(pt.activo,1)=1 AND (
+      LOWER(COALESCE(pt.codigo_barra,''))=LOWER(?)
+      OR LOWER(pt.producto)=LOWER(?)
+      OR LOWER(pt.producto) LIKE LOWER(?)
+    )
+    ORDER BY
+      CASE
+        WHEN LOWER(COALESCE(pt.codigo_barra,''))=LOWER(?) THEN 0
+        WHEN LOWER(pt.producto)=LOWER(?) THEN 1
+        ELSE 2
+      END,
+      pt.producto ASC
+    LIMIT 1`, [q, q, `${q}%`, q, q]);
+}
+
+async function recordProductoTerminadoMovimiento(req, { producto_id=null, codigo_barra='', producto, movimiento, entrada=0, salida=0, saldo=0, unidad='', cliente_id=null, cliente='', referencia='', observacion='', fecha='' }){
+  await db.run(`INSERT INTO pro_productos_terminados_movimientos(producto_id,codigo_barra,producto,movimiento,entrada,salida,saldo,unidad,cliente_id,cliente,referencia,observacion,username,fecha)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+    producto_id, safeText(codigo_barra,80), safeText(producto,180), safeText(movimiento,40), safeInt(entrada), safeInt(salida), safeInt(saldo), safeText(unidad,40),
+    cliente_id, safeText(cliente,160), safeText(referencia,80), safeText(observacion,300), safeText(req.session.user?.username,80), safeText(fecha) || nowLocalISO()
+  ]);
 }
 async function recordKardex(req, { codigo_barra='', tipo, movimiento, entrada=0, salida=0, unidad='', referencia='', observacion='', fecha='' }){
   const saldo = await getStockForTipo(tipo);
@@ -2692,17 +2782,16 @@ crudRoutes({ base:'proveedores', table:'pro_proveedores', fields:['nombre','ruc'
 crudRoutes({ base:'clientes', table:'pro_clientes', fields:['nombre','documento','telefono','correo','direccion','contacto','observaciones'], searchable:['nombre','documento','telefono','contacto'] });
 
 app.get('/api/pro/materiales', requireAuth, async (req, res) => {
-  const q = safeText(req.query.q || '', 120).toLowerCase();
+  const { q, from, to } = req.query || {};
   const clauses = ["m.activo=1"];
   const params = [];
-  if (q) {
-    clauses.push("(LOWER(COALESCE(m.tipo,'')) LIKE ? OR LOWER(COALESCE(m.codigo_barra,'')) LIKE ? OR LOWER(COALESCE(m.categoria,'')) LIKE ? OR LOWER(COALESCE(m.ubicacion,'')) LIKE ?)");
-    params.push(`%${q}%`,`%${q}%`,`%${q}%`,`%${q}%`);
-  }
+  const sWhere = buildTextSearchWhere(q, ['m.tipo','m.codigo_barra','m.categoria','m.ubicacion','m.etiqueta','p.nombre']);
+  if (sWhere.clause) { clauses.push(sWhere.clause); params.push(...sWhere.params); }
+  const f = buildDateWhere({ field: 'm.created_at', from, to });
+  if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
   const rows = await db.all(`
     SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual, p.nombre AS proveedor,
-      CASE WHEN COALESCE(s.cantidad,0) <= m.stock_crit THEN 'CRÍTICO'
-           WHEN COALESCE(s.cantidad,0) <= m.stock_min THEN 'BAJO'
+      CASE WHEN COALESCE(s.cantidad,0) <= m.stock_min THEN 'BAJO'
            ELSE 'OK' END AS estado_stock
     FROM pro_materiales m
     LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo)
@@ -2713,10 +2802,10 @@ app.get('/api/pro/materiales', requireAuth, async (req, res) => {
 });
 
 app.get('/api/pro/materiales/barcode/:codigo', requireAuth, async (req, res) => {
-  const codigo = safeText(req.params.codigo, 80);
-  const row = await db.get(`SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.codigo_barra=? LIMIT 1`, [codigo]);
-  if (!row) return res.status(404).json({ error:'not-found' });
-  res.json({ item: row });
+  const material = await findMaterialByCodeOrName(req.params.codigo);
+  if (!material) return res.status(404).json({ error:'not-found' });
+  const row = await db.get(`SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.id=? LIMIT 1`, [material.id]);
+  res.json({ item: row || material });
 });
 
 app.post('/api/pro/materiales', requireRole('supervisor','administrador'), async (req, res) => {
@@ -2727,91 +2816,123 @@ app.post('/api/pro/materiales', requireRole('supervisor','administrador'), async
   const unidad = safeText(b.unidad, 40);
   const etiqueta = safeText(b.etiqueta, 180);
   const stockInicial = safeInt(b.stock_inicial, 0);
-  const r = await db.run(`INSERT INTO pro_materiales(codigo_barra,tipo,categoria,etiqueta,unidad,ubicacion,stock_min,stock_crit,costo_unitario,proveedor_id)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`, [codigo, tipo, safeText(b.categoria,120), etiqueta, unidad, safeText(b.ubicacion,120), safeInt(b.stock_min), safeInt(b.stock_crit), safeFloat(b.costo_unitario), b.proveedor_id ? safeInt(b.proveedor_id) : null]);
-  if (stockInicial > 0) {
-    const fecha = safeText(b.fecha) || nowLocalISO();
-    await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, etiqueta, stockInicial, fecha, unidad]);
-    await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,total,fecha,unidad,action) VALUES(?,?,?,?,?,?,?)", [tipo, etiqueta, stockInicial, stockInicial, fecha, unidad, 'create']);
-    await rebuildStockForTipo(tipo);
-    await recordKardex(req, { codigo_barra:codigo || '', tipo, movimiento:'entrada inicial', entrada:stockInicial, unidad, referencia:`MAT-${r.lastID}`, fecha });
+  await db.exec('BEGIN IMMEDIATE');
+  try {
+    const r = await db.run(`INSERT INTO pro_materiales(codigo_barra,tipo,categoria,etiqueta,unidad,ubicacion,stock_min,stock_crit,costo_unitario,proveedor_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`, [codigo, tipo, safeText(b.categoria,120), etiqueta, unidad, safeText(b.ubicacion,120), safeInt(b.stock_min), 0, 0, b.proveedor_id ? safeInt(b.proveedor_id) : null]);
+    if (stockInicial > 0) {
+      const fecha = safeText(b.fecha) || nowLocalISO();
+      await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, etiqueta, stockInicial, fecha, unidad]);
+      await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,total,fecha,unidad,action) VALUES(?,?,?,?,?,?,?)", [tipo, etiqueta, stockInicial, stockInicial, fecha, unidad, 'create']);
+      await rebuildStockForTipo(tipo);
+      await recordKardex(req, { codigo_barra:codigo || '', tipo, movimiento:'entrada inicial', entrada:stockInicial, unidad, referencia:`MAT-${r.lastID}`, fecha });
+    }
+    await logEvent(req, { action:'create', entity:'pro_materiales', entityId:r.lastID, detail: JSON.stringify({ tipo, codigo_barra: codigo }) });
+    await db.exec('COMMIT');
+    res.json({ ok:true, id:r.lastID });
+  } catch (e) {
+    await db.exec('ROLLBACK').catch(()=>{});
+    throw e;
   }
-  await logEvent(req, { action:'create', entity:'pro_materiales', entityId:r.lastID, detail: JSON.stringify({ tipo, codigo_barra: codigo }) });
-  res.json({ ok:true, id:r.lastID });
 });
 
 app.put('/api/pro/materiales/:id', requireRole('supervisor','administrador'), async (req, res) => {
   const id = safeInt(req.params.id);
   const b = req.body || {};
-  await db.run(`UPDATE pro_materiales SET codigo_barra=?, tipo=?, categoria=?, etiqueta=?, unidad=?, ubicacion=?, stock_min=?, stock_crit=?, costo_unitario=?, proveedor_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-    [safeText(b.codigo_barra,80) || null, safeText(b.tipo,180), safeText(b.categoria,120), safeText(b.etiqueta,180), safeText(b.unidad,40), safeText(b.ubicacion,120), safeInt(b.stock_min), safeInt(b.stock_crit), safeFloat(b.costo_unitario), b.proveedor_id ? safeInt(b.proveedor_id) : null, id]);
+  await db.run(`UPDATE pro_materiales SET codigo_barra=?, tipo=?, categoria=?, etiqueta=?, unidad=?, ubicacion=?, stock_min=?, stock_crit=0, costo_unitario=0, proveedor_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    [safeText(b.codigo_barra,80) || null, safeText(b.tipo,180), safeText(b.categoria,120), safeText(b.etiqueta,180), safeText(b.unidad,40), safeText(b.ubicacion,120), safeInt(b.stock_min), b.proveedor_id ? safeInt(b.proveedor_id) : null, id]);
   await logEvent(req, { action:'update', entity:'pro_materiales', entityId:id });
   res.json({ ok:true });
 });
 
 app.post('/api/pro/movimiento', requireRole('supervisor','administrador'), async (req, res) => {
   const b = req.body || {};
-  const codigo = safeText(b.codigo_barra,80);
-  let material = null;
-  if (codigo) material = await db.get("SELECT * FROM pro_materiales WHERE codigo_barra=? LIMIT 1", [codigo]);
-  const tipo = safeText(b.tipo || material?.tipo, 180);
+  const buscado = safeText(b.codigo_barra || b.tipo || b.material,180);
+  const material = await findMaterialByCodeOrName(buscado);
+  const tipo = safeText(b.tipo || material?.tipo || buscado, 180);
   if (!tipo) return res.status(400).json({ error:'tipo-required' });
+  const codigo = safeText(material?.codigo_barra || '', 80);
   const unidad = safeText(b.unidad || material?.unidad, 40);
   const cantidad = Math.max(0, safeInt(b.cantidad));
   const accion = safeText(b.accion || 'entrada', 20).toLowerCase();
   const fecha = safeText(b.fecha) || nowLocalISO();
   const obs = safeText(b.observacion, 300);
+  if (!material) return res.status(404).json({ error:'material-not-found' });
   if (cantidad <= 0) return res.status(400).json({ error:'cantidad-required' });
 
-  if (accion === 'entrada') {
-    await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, safeText(b.etiqueta || material?.etiqueta,180), cantidad, fecha, unidad]);
-    await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,total,fecha,unidad,action) VALUES(?,?,?,?,?,?,?)", [tipo, safeText(b.etiqueta || material?.etiqueta,180), cantidad, null, fecha, unidad, 'add']);
-    await rebuildStockForTipo(tipo);
-    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'entrada', entrada:cantidad, unidad, referencia:'SCAN-IN', observacion:obs, fecha });
-  } else if (accion === 'salida') {
-    const stock = await getStockForTipo(tipo);
-    if (stock < cantidad) return res.status(409).json({ error:'stock-insuficiente', stock });
-    await db.run("INSERT INTO stock_retiros(tipo,cantidad,unidad,fecha) VALUES(?,?,?,?)", [tipo, cantidad, unidad, fecha]);
-    await rebuildStockForTipo(tipo);
-    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'salida', salida:cantidad, unidad, referencia:'SCAN-OUT', observacion:obs, fecha });
-  } else if (accion === 'ajuste') {
-    await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, cantidad, unidad]);
-    await rebuildStockForTipo(tipo);
-    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'ajuste', entrada:cantidad, unidad, referencia:'AJUSTE', observacion:obs, fecha });
-  } else {
-    return res.status(400).json({ error:'accion-invalid' });
+  await db.exec('BEGIN IMMEDIATE');
+  try {
+    if (accion === 'entrada') {
+      await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, safeText(b.etiqueta || material?.etiqueta,180), cantidad, fecha, unidad]);
+      await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,total,fecha,unidad,action) VALUES(?,?,?,?,?,?,?)", [tipo, safeText(b.etiqueta || material?.etiqueta,180), cantidad, null, fecha, unidad, 'add']);
+      await rebuildStockForTipo(tipo);
+      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'entrada', entrada:cantidad, unidad, referencia:'ALM-ENTRADA', observacion:obs, fecha });
+    } else if (accion === 'salida' || accion === 'dispensamiento') {
+      const stock = await getStockForTipo(tipo);
+      if (stock < cantidad) {
+        await db.exec('ROLLBACK').catch(()=>{});
+        return res.status(409).json({ error:'stock-insuficiente', stock });
+      }
+      await db.run("INSERT INTO stock_retiros(tipo,cantidad,unidad,fecha) VALUES(?,?,?,?)", [tipo, cantidad, unidad, fecha]);
+      await rebuildStockForTipo(tipo);
+      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'dispensamiento', salida:cantidad, unidad, referencia:'ALM-SALIDA', observacion:obs, fecha });
+    } else if (accion === 'ajuste') {
+      await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, cantidad, unidad]);
+      await rebuildStockForTipo(tipo);
+      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'ajuste', entrada:cantidad, unidad, referencia:'AJUSTE', observacion:obs, fecha });
+    } else {
+      await db.exec('ROLLBACK').catch(()=>{});
+      return res.status(400).json({ error:'accion-invalid' });
+    }
+    await logEvent(req, { action:`pro_${accion}`, entity:'stock', entityId:tipo, detail: JSON.stringify({ codigo_barra: codigo, cantidad, obs }) });
+    const stockActual = await getStockForTipo(tipo);
+    await db.exec('COMMIT');
+    res.json({ ok:true, stock_actual: stockActual, material: tipo });
+  } catch(e) {
+    await db.exec('ROLLBACK').catch(()=>{});
+    throw e;
   }
-  await logEvent(req, { action:`pro_${accion}`, entity:'stock', entityId:tipo, detail: JSON.stringify({ codigo_barra: codigo, cantidad, obs }) });
-  res.json({ ok:true, stock_actual: await getStockForTipo(tipo) });
 });
 
 app.get('/api/pro/kardex', requireAuth, async (req, res) => {
-  const q = safeText(req.query.q || '', 120).toLowerCase();
+  const { q, from, to } = req.query || {};
   const params = [];
-  let where = '';
-  if (q) { where = "WHERE LOWER(tipo) LIKE ? OR LOWER(COALESCE(codigo_barra,'')) LIKE ? OR LOWER(COALESCE(referencia,'')) LIKE ?"; params.push(`%${q}%`,`%${q}%`,`%${q}%`); }
-  const rows = await db.all(`SELECT * FROM pro_kardex ${where} ORDER BY created_at DESC, id DESC LIMIT 500`, params);
+  const clauses = [];
+  const sw = buildTextSearchWhere(q, ['tipo','codigo_barra','referencia','observacion','movimiento']);
+  if (sw.clause) { clauses.push(sw.clause); params.push(...sw.params); }
+  const f = buildDateWhere({ field: 'fecha', from, to });
+  if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = await db.all(`SELECT * FROM pro_kardex ${where} ORDER BY created_at DESC, id DESC LIMIT 1000`, params);
   res.json({ items: rows || [] });
 });
 
 app.post('/api/pro/conteo', requireRole('supervisor','administrador'), async (req, res) => {
   const b = req.body || {};
-  const codigo = safeText(b.codigo_barra,80);
-  let material = null;
-  if (codigo) material = await db.get("SELECT * FROM pro_materiales WHERE codigo_barra=? LIMIT 1", [codigo]);
-  const tipo = safeText(b.tipo || material?.tipo, 180);
+  const buscado = safeText(b.codigo_barra || b.tipo || b.material,180);
+  const material = await findMaterialByCodeOrName(buscado);
+  const tipo = safeText(b.tipo || material?.tipo || buscado, 180);
+  if (!material || !tipo) return res.status(404).json({ error:'material-not-found' });
+  const codigo = safeText(material?.codigo_barra || '',80);
   const stockSistema = await getStockForTipo(tipo);
   const stockFisico = safeInt(b.stock_fisico);
   const dif = stockFisico - stockSistema;
   const fecha = safeText(b.fecha) || nowLocalISO();
-  await db.run("INSERT INTO pro_conteos_inventario(codigo_barra,tipo,stock_sistema,stock_fisico,diferencia,motivo,fecha,username) VALUES(?,?,?,?,?,?,?,?)", [codigo, tipo, stockSistema, stockFisico, dif, safeText(b.motivo,300), fecha, safeText(req.session.user?.username,80)]);
-  if (String(b.aplicar_ajuste || '') === '1') {
-    await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, stockFisico, safeText(b.unidad || material?.unidad,40)]);
-    await rebuildStockForTipo(tipo);
-    await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'conteo físico', entrada:Math.max(stockFisico,0), unidad:safeText(b.unidad || material?.unidad,40), referencia:'CONTEO', observacion:safeText(b.motivo,300), fecha });
+  await db.exec('BEGIN IMMEDIATE');
+  try {
+    await db.run("INSERT INTO pro_conteos_inventario(codigo_barra,tipo,stock_sistema,stock_fisico,diferencia,motivo,fecha,username) VALUES(?,?,?,?,?,?,?,?)", [codigo, tipo, stockSistema, stockFisico, dif, safeText(b.motivo,300), fecha, safeText(req.session.user?.username,80)]);
+    if (String(b.aplicar_ajuste || '') === '1') {
+      await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, stockFisico, safeText(b.unidad || material?.unidad,40)]);
+      await rebuildStockForTipo(tipo);
+      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'conteo físico', entrada:Math.max(stockFisico,0), unidad:safeText(b.unidad || material?.unidad,40), referencia:'CONTEO', observacion:safeText(b.motivo,300), fecha });
+    }
+    await logEvent(req, { action:'conteo', entity:'pro_conteo', entityId:tipo, detail: JSON.stringify({ stockSistema, stockFisico, dif }) });
+    await db.exec('COMMIT');
+    res.json({ ok:true, diferencia:dif, stock_sistema:stockSistema, stock_fisico:stockFisico });
+  } catch(e) {
+    await db.exec('ROLLBACK').catch(()=>{});
+    throw e;
   }
-  await logEvent(req, { action:'conteo', entity:'pro_conteo', entityId:tipo, detail: JSON.stringify({ stockSistema, stockFisico, dif }) });
-  res.json({ ok:true, diferencia:dif, stock_sistema:stockSistema, stock_fisico:stockFisico });
 });
 
 app.get('/api/pro/conteos', requireAuth, async (req, res) => {
@@ -2820,41 +2941,211 @@ app.get('/api/pro/conteos', requireAuth, async (req, res) => {
 });
 
 app.get('/api/pro/productos-terminados', requireAuth, async (req, res) => {
-  const rows = await db.all("SELECT pt.*, c.nombre AS cliente FROM pro_productos_terminados pt LEFT JOIN pro_clientes c ON c.id=pt.cliente_id ORDER BY pt.producto ASC");
+  const { q, from, to } = req.query || {};
+  const clauses = ["COALESCE(pt.activo,1)=1"];
+  const params = [];
+  const sw = buildTextSearchWhere(q, ['pt.producto','pt.codigo_barra','pt.descripcion','pt.unidad','c.nombre']);
+  if (sw.clause) { clauses.push(sw.clause); params.push(...sw.params); }
+  const f = buildDateWhere({ field: 'pt.created_at', from, to });
+  if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const rows = await db.all(`SELECT pt.*, c.nombre AS cliente FROM pro_productos_terminados pt LEFT JOIN pro_clientes c ON c.id=pt.cliente_id WHERE ${clauses.join(' AND ')} ORDER BY pt.producto ASC`, params);
   res.json({ items: rows || [] });
 });
-app.post('/api/pro/productos-terminados', requireRole('supervisor','administrador'), async (req,res)=>{
-  const b=req.body||{}; const producto=safeText(b.producto,180); if(!producto) return res.status(400).json({error:'producto-required'});
-  const r=await db.run("INSERT INTO pro_productos_terminados(codigo_barra,producto,descripcion,unidad,stock,stock_min,cliente_id) VALUES(?,?,?,?,?,?,?)", [safeText(b.codigo_barra,80)||null, producto, safeText(b.descripcion,300), safeText(b.unidad,40), safeInt(b.stock), safeInt(b.stock_min), b.cliente_id ? safeInt(b.cliente_id) : null]);
-  await logEvent(req,{action:'create',entity:'pro_productos_terminados',entityId:r.lastID}); res.json({ok:true,id:r.lastID});
+
+app.get('/api/pro/productos-terminados-movimientos', requireAuth, async (req, res) => {
+  const { q, from, to } = req.query || {};
+  const clauses = [];
+  const params = [];
+  const sw = buildTextSearchWhere(q, ['producto','codigo_barra','cliente','observacion','movimiento']);
+  if (sw.clause) { clauses.push(sw.clause); params.push(...sw.params); }
+  const f = buildDateWhere({ field: 'fecha', from, to });
+  if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = await db.all(`SELECT * FROM pro_productos_terminados_movimientos ${where} ORDER BY created_at DESC, id DESC LIMIT 1000`, params);
+  res.json({ items: rows || [] });
 });
+
+app.post('/api/pro/productos-terminados', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{};
+  const producto=safeText(b.producto || b.codigo_barra,180);
+  if(!producto) return res.status(400).json({error:'producto-required'});
+  const codigo=safeText(b.codigo_barra,80)||null;
+  const unidad=safeText(b.unidad,40);
+  const cantidad=Math.max(0, safeInt(b.cantidad ?? b.stock));
+  if(cantidad <= 0) return res.status(400).json({error:'cantidad-required'});
+  const fecha=safeText(b.fecha)||nowLocalISO();
+  const clienteId=b.cliente_id ? safeInt(b.cliente_id) : null;
+  const clienteRow=clienteId ? await db.get('SELECT nombre FROM pro_clientes WHERE id=?',[clienteId]) : null;
+  await db.exec('BEGIN IMMEDIATE');
+  try{
+    let item = codigo ? await findProductoTerminadoByCodeOrName(codigo) : null;
+    if(!item) item = await findProductoTerminadoByCodeOrName(producto);
+    let id, saldo;
+    if(item){
+      saldo = safeInt(item.stock) + cantidad;
+      id = item.id;
+      await db.run(`UPDATE pro_productos_terminados SET codigo_barra=COALESCE(?,codigo_barra), producto=?, descripcion=?, unidad=?, stock=?, cliente_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+        [codigo, producto || item.producto, safeText(b.descripcion || item.descripcion,300), unidad || item.unidad, saldo, clienteId || item.cliente_id || null, id]);
+    } else {
+      const r=await db.run("INSERT INTO pro_productos_terminados(codigo_barra,producto,descripcion,unidad,stock,stock_min,cliente_id) VALUES(?,?,?,?,?,?,?)", [codigo, producto, safeText(b.descripcion,300), unidad, cantidad, 0, clienteId]);
+      id=r.lastID; saldo=cantidad;
+    }
+    await recordProductoTerminadoMovimiento(req,{producto_id:id,codigo_barra:codigo||'',producto,movimiento:'producción',entrada:cantidad,saldo,unidad,cliente_id:clienteId,cliente:clienteRow?.nombre||'',referencia:'PRODUCCION',observacion:safeText(b.observacion,300),fecha});
+    await logEvent(req,{action:'create',entity:'pro_productos_terminados',entityId:id,detail:JSON.stringify({producto,cantidad})});
+    await db.exec('COMMIT');
+    res.json({ok:true,id,stock_actual:saldo});
+  }catch(e){ await db.exec('ROLLBACK').catch(()=>{}); throw e; }
+});
+
 app.put('/api/pro/productos-terminados/:id', requireRole('supervisor','administrador'), async (req,res)=>{
   const b=req.body||{}; const id=safeInt(req.params.id);
-  await db.run("UPDATE pro_productos_terminados SET codigo_barra=?, producto=?, descripcion=?, unidad=?, stock=?, stock_min=?, cliente_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.codigo_barra,80)||null, safeText(b.producto,180), safeText(b.descripcion,300), safeText(b.unidad,40), safeInt(b.stock), safeInt(b.stock_min), b.cliente_id ? safeInt(b.cliente_id) : null, id]);
+  await db.run("UPDATE pro_productos_terminados SET codigo_barra=?, producto=?, descripcion=?, unidad=?, cliente_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.codigo_barra,80)||null, safeText(b.producto,180), safeText(b.descripcion,300), safeText(b.unidad,40), b.cliente_id ? safeInt(b.cliente_id) : null, id]);
   res.json({ok:true});
 });
 
+app.get('/api/pro/envios-terminados', requireAuth, async (req,res)=>{
+  const { q, from, to } = req.query || {};
+  const clauses=[]; const params=[];
+  const sw=buildTextSearchWhere(q, ['producto','codigo_barra','cliente','observacion','unidad','username']);
+  if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
+  const f=buildDateWhere({ field:'fecha', from, to });
+  if(f.where){ clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const where=clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows=await db.all(`SELECT * FROM pro_envios_terminados ${where} ORDER BY created_at DESC, id DESC LIMIT 1000`, params);
+  res.json({items:rows||[]});
+});
+
+app.post('/api/pro/envios-terminados', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{};
+  const buscado=safeText(b.buscar || b.codigo_barra || b.producto,180);
+  const item=await findProductoTerminadoByCodeOrName(buscado);
+  if(!item) return res.status(404).json({error:'producto-not-found'});
+  const cantidad=Math.max(0, safeInt(b.cantidad));
+  if(cantidad<=0) return res.status(400).json({error:'cantidad-required'});
+  const stock=safeInt(item.stock);
+  if(stock<cantidad) return res.status(409).json({error:'stock-insuficiente',stock});
+  const clienteId=b.cliente_id ? safeInt(b.cliente_id) : (item.cliente_id || null);
+  const clienteRow=clienteId ? await db.get('SELECT nombre FROM pro_clientes WHERE id=?',[clienteId]) : null;
+  const cliente=safeText(clienteRow?.nombre || b.cliente || item.cliente || '',160);
+  const fecha=safeText(b.fecha)||nowLocalISO();
+  const unidad=safeText(b.unidad || item.unidad,40);
+  const saldo=stock-cantidad;
+  await db.exec('BEGIN IMMEDIATE');
+  try{
+    await db.run('UPDATE pro_productos_terminados SET stock=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',[saldo,item.id]);
+    const r=await db.run(`INSERT INTO pro_envios_terminados(producto_id,codigo_barra,producto,cantidad,unidad,cliente_id,cliente,observacion,username,fecha)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`,[item.id,item.codigo_barra||'',item.producto,cantidad,unidad,clienteId,cliente,safeText(b.observacion,300),safeText(req.session.user?.username,80),fecha]);
+    await recordProductoTerminadoMovimiento(req,{producto_id:item.id,codigo_barra:item.codigo_barra||'',producto:item.producto,movimiento:'envío',salida:cantidad,saldo,unidad,cliente_id:clienteId,cliente,referencia:`ENV-${r.lastID}`,observacion:safeText(b.observacion,300),fecha});
+    await logEvent(req,{action:'create',entity:'pro_envios_terminados',entityId:r.lastID,detail:JSON.stringify({producto:item.producto,cantidad,cliente})});
+    await db.exec('COMMIT');
+    res.json({ok:true,id:r.lastID,stock_actual:saldo});
+  }catch(e){ await db.exec('ROLLBACK').catch(()=>{}); throw e; }
+});
+
 app.get('/api/pro/ordenes-produccion', requireAuth, async (req,res)=>{
-  const rows=await db.all("SELECT * FROM pro_ordenes_produccion ORDER BY created_at DESC, id DESC LIMIT 300"); res.json({items:rows||[]});
+  const rows=await db.all("SELECT * FROM pro_ordenes_produccion ORDER BY created_at DESC, id DESC LIMIT 500"); res.json({items:rows||[]});
 });
 app.post('/api/pro/ordenes-produccion', requireRole('supervisor','administrador'), async (req,res)=>{
   const b=req.body||{}; const codigo=safeText(b.codigo,80) || `OP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
-  const r=await db.run("INSERT INTO pro_ordenes_produccion(codigo,producto,cantidad_planificada,cantidad_producida,estado,responsable,observacion,fecha) VALUES(?,?,?,?,?,?,?,?)", [codigo,safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente',safeText(b.responsable,120),safeText(b.observacion,300),safeText(b.fecha)||nowLocalISO()]);
+  const fechaInicio=safeText(b.fecha_inicio,10);
+  const fechaFinal=safeText(b.fecha_final,10);
+  const r=await db.run("INSERT INTO pro_ordenes_produccion(codigo,producto,cantidad_planificada,cantidad_producida,estado,responsable,observacion,fecha,fecha_inicio,fecha_final) VALUES(?,?,?,?,?,?,?,?,?,?)", [codigo,safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente','',safeText(b.observacion,300),fechaInicio||nowLocalISO(),fechaInicio,fechaFinal]);
   await logEvent(req,{action:'create',entity:'pro_ordenes_produccion',entityId:r.lastID,detail:codigo}); res.json({ok:true,id:r.lastID,codigo});
 });
 app.put('/api/pro/ordenes-produccion/:id', requireRole('supervisor','administrador'), async (req,res)=>{
   const b=req.body||{}; const id=safeInt(req.params.id);
-  await db.run("UPDATE pro_ordenes_produccion SET producto=?, cantidad_planificada=?, cantidad_producida=?, estado=?, responsable=?, observacion=?, fecha=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente',safeText(b.responsable,120),safeText(b.observacion,300),safeText(b.fecha)||nowLocalISO(),id]);
+  const fechaInicio=safeText(b.fecha_inicio,10);
+  const fechaFinal=safeText(b.fecha_final,10);
+  await db.run("UPDATE pro_ordenes_produccion SET producto=?, cantidad_planificada=?, cantidad_producida=?, estado=?, responsable='', observacion=?, fecha=?, fecha_inicio=?, fecha_final=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente',safeText(b.observacion,300),fechaInicio||nowLocalISO(),fechaInicio,fechaFinal,id]);
   res.json({ok:true});
 });
 
+
+app.get('/api/pro/materiales.pdf', requireAuth, async (req,res)=>{
+  const { q, from, to } = req.query || {};
+  const clauses=["m.activo=1"]; const params=[];
+  const sw=buildTextSearchWhere(q, ['m.tipo','m.codigo_barra','m.categoria','m.ubicacion','m.etiqueta','p.nombre']);
+  if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
+  const f=buildDateWhere({field:'m.created_at',from,to});
+  if(f.where){ clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const rows=await db.all(`SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual, p.nombre AS proveedor FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) LEFT JOIN pro_proveedores p ON p.id=m.proveedor_id WHERE ${clauses.join(' AND ')} ORDER BY m.tipo ASC`, params);
+  const doc=startPdf(res,'almacen_materiales.pdf','Almacén – Catálogo de materiales',{layout:'landscape'});
+  drawTable(doc,['Código','Material','Categoría','Lote','Stock','Unidad','Ubicación','Proveedor'],[90,160,95,90,55,70,110,100],rows.map(r=>[r.codigo_barra||'',r.tipo||'',r.categoria||'',r.etiqueta||'',r.stock_actual||0,r.unidad||'',r.ubicacion||'',r.proveedor||'']));
+  doc.end();
+});
+
+app.get('/api/pro/kardex.pdf', requireAuth, async (req,res)=>{
+  const { q, from, to }=req.query||{}; const clauses=[]; const params=[];
+  const sw=buildTextSearchWhere(q, ['tipo','codigo_barra','referencia','observacion','movimiento']);
+  if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
+  const f=buildDateWhere({field:'fecha',from,to}); if(f.where){ clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const where=clauses.length?`WHERE ${clauses.join(' AND ')}`:'';
+  const rows=await db.all(`SELECT * FROM pro_kardex ${where} ORDER BY created_at DESC, id DESC LIMIT 1000`, params);
+  const doc=startPdf(res,'almacen_kardex.pdf','Almacén – Kardex de movimientos',{layout:'landscape'});
+  drawTable(doc,['Fecha','Código','Material','Mov.','Entrada','Salida','Saldo','Obs.'],[95,90,170,90,55,55,55,160],rows.map(r=>[formatPdfDateTime(r.fecha),r.codigo_barra||'',r.tipo||'',r.movimiento||'',r.entrada||0,r.salida||0,r.saldo||0,r.observacion||'']));
+  doc.end();
+});
+
+app.get('/api/pro/productos-terminados.pdf', requireAuth, async (req,res)=>{
+  const { q, from, to }=req.query||{}; const clauses=["COALESCE(pt.activo,1)=1"]; const params=[];
+  const sw=buildTextSearchWhere(q, ['pt.producto','pt.codigo_barra','pt.descripcion','pt.unidad','c.nombre']); if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
+  const f=buildDateWhere({field:'pt.created_at',from,to}); if(f.where){ clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const rows=await db.all(`SELECT pt.*, c.nombre AS cliente FROM pro_productos_terminados pt LEFT JOIN pro_clientes c ON c.id=pt.cliente_id WHERE ${clauses.join(' AND ')} ORDER BY pt.producto ASC`,params);
+  const doc=startPdf(res,'productos_terminados.pdf','Almacén – Productos terminados',{layout:'landscape'});
+  drawTable(doc,['Código','Producto','Stock','Unidad','Cliente','Descripción','Actualizado'],[90,180,55,70,130,160,85],rows.map(r=>[r.codigo_barra||'',r.producto||'',r.stock||0,r.unidad||'',r.cliente||'',r.descripcion||'',formatPdfDateTime(r.updated_at)]));
+  doc.end();
+});
+
+app.get('/api/pro/envios-terminados.pdf', requireAuth, async (req,res)=>{
+  const { q, from, to }=req.query||{}; const clauses=[]; const params=[];
+  const sw=buildTextSearchWhere(q, ['producto','codigo_barra','cliente','observacion','unidad','username']); if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
+  const f=buildDateWhere({field:'fecha',from,to}); if(f.where){ clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
+  const where=clauses.length?`WHERE ${clauses.join(' AND ')}`:'';
+  const rows=await db.all(`SELECT * FROM pro_envios_terminados ${where} ORDER BY created_at DESC, id DESC LIMIT 1000`,params);
+  const doc=startPdf(res,'envios_productos_terminados.pdf','Almacén – Envíos de productos terminados',{layout:'landscape'});
+  drawTable(doc,['Fecha','Código','Producto','Cliente','Cantidad','Unidad','Observación','Usuario'],[85,85,160,130,65,65,140,80],rows.map(r=>[formatPdfDateTime(r.fecha),r.codigo_barra||'',r.producto||'',r.cliente||'',r.cantidad||0,r.unidad||'',r.observacion||'',r.username||'']));
+  doc.end();
+});
+
 app.get('/api/pro/dashboard', requireAuth, async (req, res) => {
+  const getCount = async (sql, params=[]) => {
+    try { const row = await db.get(sql, params); return row?.c || 0; } catch { return 0; }
+  };
   const mats = await db.get("SELECT COUNT(*) AS c FROM pro_materiales WHERE activo=1");
-  const crit = await db.get(`SELECT COUNT(*) AS c FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.activo=1 AND COALESCE(s.cantidad,0) <= m.stock_crit`);
   const low = await db.get(`SELECT COUNT(*) AS c FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.activo=1 AND COALESCE(s.cantidad,0) <= m.stock_min`);
   const op = await db.get("SELECT COUNT(*) AS c FROM pro_ordenes_produccion WHERE estado IN ('Pendiente','En proceso')");
-  const envPend = await db.get("SELECT COUNT(*) AS c FROM envios WHERE date(substr(fecha,1,10)) >= date('now','-30 day')");
-  res.json({ materiales:mats?.c||0, stock_critico:crit?.c||0, stock_bajo:low?.c||0, ordenes_abiertas:op?.c||0, envios_30d:envPend?.c||0 });
+  const opTotal = await getCount("SELECT COUNT(*) AS c FROM pro_ordenes_produccion");
+  const pt = await db.get("SELECT COUNT(*) AS c, COALESCE(SUM(stock),0) AS total FROM pro_productos_terminados WHERE COALESCE(activo,1)=1");
+  const env = await db.get("SELECT COUNT(*) AS c FROM pro_envios_terminados WHERE date(substr(fecha,1,10)) >= date('now','-30 day')");
+  const envTotal = await getCount("SELECT COUNT(*) AS c FROM pro_envios_terminados");
+  const kardex = await getCount("SELECT COUNT(*) AS c FROM pro_kardex");
+  const conteos = await getCount("SELECT COUNT(*) AS c FROM pro_conteos_inventario");
+  const proveedores = await getCount("SELECT COUNT(*) AS c FROM pro_proveedores");
+  const clientes = await getCount("SELECT COUNT(*) AS c FROM pro_clientes");
+  const defectuosos = await getCount("SELECT COUNT(*) AS c FROM defectuosos");
+  const maquinaria = await getCount("SELECT COUNT(*) AS c FROM maquinaria");
+  const repuestos = await getCount("SELECT COUNT(*) AS c FROM repuestos");
+  const entradas30 = await getCount("SELECT COUNT(*) AS c FROM pro_kardex WHERE movimiento IN ('entrada','entrada inicial','producción') AND date(substr(fecha,1,10)) >= date('now','-30 day')");
+  const salidas30 = await getCount("SELECT COUNT(*) AS c FROM pro_kardex WHERE movimiento IN ('dispensamiento','envío') AND date(substr(fecha,1,10)) >= date('now','-30 day')");
+  res.json({
+    materiales:mats?.c||0,
+    stock_bajo:low?.c||0,
+    ordenes_abiertas:op?.c||0,
+    ordenes_total:opTotal,
+    productos_terminados:pt?.c||0,
+    stock_terminados:pt?.total||0,
+    envios_30d:env?.c||0,
+    envios_total:envTotal,
+    kardex_movimientos:kardex,
+    conteos_fisicos:conteos,
+    proveedores,
+    clientes,
+    defectuosos,
+    maquinaria,
+    repuestos,
+    entradas_30d:entradas30,
+    salidas_30d:salidas30
+  });
 });
 
 // -----------------------------------------------------------------------------
