@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+Data
+data
+node_modules
+backups
+release
+test-results
+coverage
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+.DS_Store

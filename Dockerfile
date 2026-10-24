@@ -1,36 +1,19 @@
-# Etapa 1: instalar dependencias nativas de forma limpia y verificable
-FROM node:20-bookworm-slim AS deps
-WORKDIR /usr/src/app
+FROM node:24-bookworm-slim AS dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
-
-# Se copia primero package.json/lock para aprovechar cache de Docker.
-COPY package.json package-lock.json* ./
-
-# Forzamos registry público y validamos que express/sqlite3 realmente existan.
-# Esto evita imágenes construidas con node_modules incompletos o cache corrupta.
-RUN set -eux; \
-  npm config set registry https://registry.npmjs.org/; \
-  npm cache clean --force; \
-  if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi; \
-  test -f node_modules/express/index.js; \
-  test -f node_modules/sqlite3/lib/sqlite3.js
-
-# Etapa 2: imagen final ligera para VPS
-FROM node:20-bookworm-slim
-WORKDIR /usr/src/app
-ENV NODE_ENV=production
-
-COPY --from=deps /usr/src/app/node_modules ./node_modules
-COPY package.json package-lock.json* ./
-COPY server.js ./
-COPY public ./public
-
-RUN mkdir -p Data \
-  && chown -R node:node /usr/src/app
-
+FROM node:24-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production PORT=3000 DATA_DIR=/app/Data
+COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node package.json package-lock.json server.js ./
+COPY --chown=node:node lib ./lib
+COPY --chown=node:node public ./public
+COPY --chown=node:node scripts ./scripts
+RUN mkdir -p Data && chown node:node Data
 USER node
 EXPOSE 3000
-CMD ["npm", "start"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "server.js"]

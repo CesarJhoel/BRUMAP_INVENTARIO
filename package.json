@@ -1,23 +1,27 @@
 {
-  "name": "bbrumapp",
-  "version": "7.1.0",
+  "name": "brumap-inventario",
+  "version": "8.0.0",
   "type": "module",
   "scripts": {
-    "start": "NODE_ENV=production node server.js",
-    "dev": "NODE_ENV=development node server.js"
+    "start": "NODE_ENV=production node --env-file-if-exists=.env server.js",
+    "dev": "NODE_ENV=development node --env-file-if-exists=.env --watch server.js",
+    "setup": "node scripts/setup.mjs",
+    "test": "node --test test/*.test.js",
+    "check": "node --check server.js && node --check public/assets/js/app.js && node --check public/assets/js/login.js",
+    "package": "node scripts/package.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
-    "cookie-parser": "^1.4.6",
-    "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.1.5",
     "express-session": "^1.17.3",
     "helmet": "^7.2.0",
-    "pdfkit": "^0.14.0",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
-    "xlsx": "^0.18.5"
+    "pdfkit": "^0.14.0"
+  },
+  "private": true,
+  "description": "Control de inventario, producci\u00f3n y trazabilidad BRUMAP",
+  "engines": {
+    "node": ">=24 <25"
   }
 }

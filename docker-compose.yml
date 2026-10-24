@@ -1,29 +1,37 @@
 services:
-  brumap_inventario:
-    build: .
-    container_name: brumap_inventario
+  brumap:
+    build:
+      context: .
+      target: runtime
+    image: brumap-inventario:8.0.0
+    init: true
     ports:
-      - "3000:3000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-3000}:3000"
     environment:
-      NODE_ENV: "production"
-      COOKIE_SECURE: "0"
-      SESSION_SECRET: "cambia_esto_por_una_clave_larga_y_segura"
-      AUDIT_ENABLED: "1"
-      AUDIT_LEVEL: "normal"
-      AUDIT_RETENTION_DAYS: "120"
-      AUDIT_MAX_ROWS: "15000"
-      AUDIT_DETAIL_MAX_CHARS: "350"
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /app/Data
+      SESSION_SECRET: ${SESSION_SECRET:?Ejecuta sh scripts/setup.sh para generar .env}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:?Ejecuta sh scripts/setup.sh para generar .env}
+      PROTECTED_SUPERVISOR_USERNAME: ${PROTECTED_SUPERVISOR_USERNAME:-supervisor}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      AUDIT_ENABLED: ${AUDIT_ENABLED:-1}
+      AUDIT_LEVEL: ${AUDIT_LEVEL:-minimal}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90}
+      AUDIT_MAX_ROWS: ${AUDIT_MAX_ROWS:-8000}
     volumes:
-      - ./Data:/usr/src/app/Data
+      - brumap_data:/app/Data
     restart: unless-stopped
+    stop_grace_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
-        max-size: "10m"
+        max-size: 10m
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+volumes:
+  brumap_data:

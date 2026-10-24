@@ -3,32 +3,43 @@ import session from 'express-session';
 import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
-import cookieParser from 'cookie-parser';
-import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { openDatabase } from './lib/database.js';
+import { rebuildMaterialStock, saveStockAdjustment, nonNegativeInteger, localISO } from './lib/inventory.js';
+import { createSessionStore } from './lib/session-store.js';
+import crypto from 'node:crypto';
 import PDFDocument from 'pdfkit';
 import bcrypt from 'bcryptjs';
-import * as XLSX from 'xlsx';
+import { createWorkbook } from './lib/workbook.js';
+import { completeOrder, shipProduct, OperationError } from './lib/production.js';
 
-dotenv.config();
+if (fs.existsSync('.env')) process.loadEnvFile('.env');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+// Express 4 no recoge automáticamente rechazos de controladores async.
+const wrap = handler => typeof handler === 'function' && handler.length < 4
+  ? (req,res,next) => Promise.resolve().then(() => handler(req,res,next)).catch(next) : handler;
+for (const method of ['get','post','put','patch','delete','use']) {
+  const original = app[method].bind(app);
+  app[method] = (...args) => original(...args.map(wrap));
+}
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PROD = NODE_ENV === 'production';
 const COOKIE_SECURE_ENV = process.env.COOKIE_SECURE === '1';
 const USE_SECURE_COOKIES = COOKIE_SECURE_ENV && IS_PROD;
 
-// Cuenta Supervisor protegida (no se puede eliminar ni cambiar contraseña)
+// Cuenta principal: protegida contra eliminación; su contraseña sí puede cambiarse.
 const PROTECTED_SUPERVISOR_USERNAME = String(process.env.PROTECTED_SUPERVISOR_USERNAME || 'supervisor').toLowerCase();
-const PROTECTED_SUPERVISOR_PASSWORD = String(process.env.PROTECTED_SUPERVISOR_PASSWORD || 'Admin');
+const BOOTSTRAP_PASSWORD = process.env.BOOTSTRAP_PASSWORD || process.env.PROTECTED_SUPERVISOR_PASSWORD || '';
+const SESSION_SECRET = process.env.SESSION_SECRET || (IS_PROD ? '' : crypto.randomBytes(32).toString('hex'));
+if (IS_PROD && SESSION_SECRET.length < 32) throw new Error('SESSION_SECRET debe tener al menos 32 caracteres. Ejecuta node scripts/setup.mjs.');
+function validPassword(value) { return typeof value === 'string' && value.length >= 12 && Buffer.byteLength(value) <= 72; }
 
 // Auditoría optimizada para VPS:
 // - normal: guarda eventos administrativos y cambios relevantes, pero evita duplicar escaneos de stock que ya viven en Kardex.
@@ -44,14 +55,12 @@ const AUDIT_CLEANUP_INTERVAL_MS = Math.max(60_000, parseInt(process.env.AUDIT_CL
 let lastAuditCleanupAt = 0;
 
 // Si usamos cookies seguras detrás de un proxy (nginx, etc.), hay que confiar en el proxy
-if (USE_SECURE_COOKIES) {
-  app.set('trust proxy', 1);
-}
+if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 
 // -----------------------------------------------------------------------------
 // Directorio de datos (BD) – OWASP A05: evitar rutas débiles y asegurar permisos
 // -----------------------------------------------------------------------------
-const DATA_DIR = path.join(__dirname, 'Data');
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'Data'));
 
 // Compatibilidad: si existe carpeta antigua "data", migrar a "Data"
 const LEGACY_DATA_DIR = path.join(__dirname, 'data');
@@ -72,10 +81,7 @@ const DB_FILE = path.join(DATA_DIR, 'brumapp.db');
 // -----------------------------------------------------------------------------
 // Conexión SQLite – OWASP A03: siempre usar parámetros, nunca concatenar SQL
 // -----------------------------------------------------------------------------
-let db = await open({
-  filename: DB_FILE,
-  driver: sqlite3.Database
-});
+let db = await openDatabase(DB_FILE);
 
 // Ajustes SQLite para VPS: mejor concurrencia de lecturas/escrituras y menor bloqueo.
 await db.exec(`
@@ -235,6 +241,7 @@ await ensureColumn('recepciones', 'etiqueta', 'TEXT');
 await ensureColumn('produccion',  'tipo',   'TEXT');
 await ensureColumn('produccion',  'unidad', 'TEXT');
 await ensureColumn('defectuosos', 'unidad', 'TEXT');
+await ensureColumn('defectuosos', 'stock_descontado', 'INTEGER NOT NULL DEFAULT 0');
 await ensureColumn('envios',      'unidad', 'TEXT');
 
 // Users: columna de protección (evita borrado del Supervisor principal)
@@ -247,78 +254,24 @@ await ensureColumn('stock_productos', 'updated_at', 'TEXT');
 await ensureColumn('stock_retiros', 'unidad', 'TEXT');
 await ensureColumn('stock_retiros', 'fecha', 'TEXT');
 
-// Población inicial de stock (para BD existentes)
-try {
-  const tipos = await db.all("SELECT DISTINCT tipo FROM recepciones");
-  for (const row of (tipos || [])) {
-    if (row && row.tipo) {
-      await rebuildStockForTipo(row.tipo);
-    }
-  }
-  await db.run("DELETE FROM stock_productos WHERE LOWER(tipo) NOT IN (SELECT LOWER(tipo) FROM recepciones)");
-} catch (e) {
-  console.warn('No se pudo reconstruir stock inicial:', e?.message || e);
-}
+await ensureColumn('stock_ajustes', 'recepcion_cursor', 'INTEGER');
+await ensureColumn('stock_ajustes', 'retiro_cursor', 'INTEGER');
 
-await seedRecepcionesMovimientosIfEmpty();
-
-// -----------------------------------------------------------------------------
-// Seed de usuarios – OWASP A07: credenciales hash con bcrypt, roles bien definidos
-// -----------------------------------------------------------------------------
 async function seedUsersIfEmpty() {
-  const countUsers = await db.get(`SELECT COUNT(*) as c FROM users`);
-  if (!countUsers || countUsers.c === 0) {
-    const hpDefault = await bcrypt.hash('admin', 10);
-    const hpSupervisor = await bcrypt.hash(PROTECTED_SUPERVISOR_PASSWORD, 10);
-
-    await db.run(
-      "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,?)",
-      ['operario', hpDefault, 'operario', 0]
-    );
-    await db.run(
-      "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,?)",
-      [PROTECTED_SUPERVISOR_USERNAME, hpSupervisor, 'supervisor', 1]
-    );
-    await db.run(
-      "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,?)",
-      ['administrador', hpDefault, 'administrador', 0]
-    );
-    console.log('Seeded users (bcrypt): usuarios iniciales creados. Cambia las contraseñas por defecto antes de producción.');
-  }
+  const count = await db.get('SELECT COUNT(*) AS c FROM users');
+  if (count.c) return;
+  if (!validPassword(BOOTSTRAP_PASSWORD)) throw new Error('BOOTSTRAP_PASSWORD debe tener entre 12 y 72 bytes. Ejecuta node scripts/setup.mjs.');
+  if (!/^[a-z0-9._-]{3,32}$/.test(PROTECTED_SUPERVISOR_USERNAME)) throw new Error('Nombre de supervisor inválido.');
+  const hash = await bcrypt.hash(BOOTSTRAP_PASSWORD, 12);
+  await db.run('INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,1)', [PROTECTED_SUPERVISOR_USERNAME, hash, 'supervisor']);
+  console.log('Cuenta principal creada:', PROTECTED_SUPERVISOR_USERNAME);
 }
-
-await seedUsersIfEmpty();
-
-// Garantiza que exista una cuenta supervisora protegida sin sobrescribir su contraseña.
-// La contraseña solo se usa cuando la cuenta todavía no existe; después no se fuerza en cada arranque.
 async function ensureProtectedSupervisor() {
-  const row = await db.get(
-    "SELECT id, username, password, role, is_protected FROM users WHERE LOWER(username)=LOWER(?) LIMIT 1",
-    [PROTECTED_SUPERVISOR_USERNAME]
-  );
-
-  if (!row) {
-    const hpSupervisor = await bcrypt.hash(PROTECTED_SUPERVISOR_PASSWORD, 10);
-    await db.run(
-      "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,1)",
-      [PROTECTED_SUPERVISOR_USERNAME, hpSupervisor, 'supervisor']
-    );
-    console.log('Created protected supervisor user:', PROTECTED_SUPERVISOR_USERNAME);
-    return;
-  }
-
-  const needsRole = String(row.role || '') !== 'supervisor';
-  const needsProtected = Number(row.is_protected || 0) !== 1;
-
-  if (needsRole || needsProtected) {
-    await db.run(
-      "UPDATE users SET role=?, is_protected=1 WHERE id=?",
-      ['supervisor', row.id]
-    );
-  }
+  await db.run("UPDATE users SET is_protected=1 WHERE LOWER(username)=? AND role='supervisor'", [PROTECTED_SUPERVISOR_USERNAME]);
 }
-
+await seedUsersIfEmpty();
 await ensureProtectedSupervisor();
+await seedRecepcionesMovimientosIfEmpty();
 
 // -----------------------------------------------------------------------------
 // Historial de entradas (Recepciones)
@@ -449,12 +402,19 @@ let RESTORE_IN_PROGRESS = false;
 
 async function ensureSchemaAfterRestore() {
   await db.exec(BASE_SCHEMA_SQL);
+  await db.exec(PRO_SCHEMA_SQL);
+  await ensureColumn('stock_ajustes', 'recepcion_cursor', 'INTEGER');
+  await ensureColumn('stock_ajustes', 'retiro_cursor', 'INTEGER');
+  await ensureColumn('pro_ordenes_produccion', 'fecha_inicio', 'TEXT');
+  await ensureColumn('pro_ordenes_produccion', 'fecha_final', 'TEXT');
+  await ensureColumn('pro_productos_terminados', 'activo', 'INTEGER NOT NULL DEFAULT 1');
   // Migraciones para BD antiguas
   await ensureColumn('recepciones', 'unidad', 'TEXT');
   await ensureColumn('recepciones', 'etiqueta', 'TEXT');
   await ensureColumn('produccion',  'tipo',   'TEXT');
   await ensureColumn('produccion',  'unidad', 'TEXT');
   await ensureColumn('defectuosos', 'unidad', 'TEXT');
+  await ensureColumn('defectuosos', 'stock_descontado', 'INTEGER NOT NULL DEFAULT 0');
   await ensureColumn('envios',      'unidad', 'TEXT');
 
   // Users: protección del Supervisor principal
@@ -489,16 +449,10 @@ function formatDateYmdToDmy(s) {
   return `${d}-${m}-${y}`;
 }
 
-function formatDateTimeYmdToDmy(s) {
-  if (!s) return '';
-  const [datePartRaw, timeRaw] = String(s).split(/[T ]/);
-  const parts = (datePartRaw || '').split('-');
-  if (parts.length !== 3) return s;
-  const [y, m, d] = parts;
-  const date = `${d}-${m}-${y}`;
-  if (!timeRaw) return date;
-  const time = timeRaw.slice(0, 5); // HH:MM
-  return `${date} ${time}`;
+function formatDateTimeYmdToDmy(value) {
+  if(!value)return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(String(value)))return formatDateYmdToDmy(value);
+  return formatTsLima(value);
 }
 
 // -----------------------------------------------------------------------------
@@ -516,7 +470,7 @@ function normalizeYmd(v) {
 function buildDateWhere({ field, from, to }) {
   const f = normalizeYmd(from);
   const t = normalizeYmd(to);
-  const dateExpr = `date(substr(${field},1,10))`;
+  const dateExpr = /(?:created_at|updated_at|ts)$/.test(field) ? `date(${field},'-5 hours')` : `date(substr(${field},1,10))`;
   if (f && t) {
     return {
       where: `WHERE ${dateExpr} BETWEEN date(?) AND date(?)`,
@@ -594,17 +548,19 @@ if (IS_PROD) {
       useDefaults: false,
       directives: {
         "default-src": ["'self'"],
-        "script-src": ["'self'", "https://cdn.jsdelivr.net"],
+        "script-src": ["'self'"],
         "style-src": ["'self'", "'unsafe-inline'"],
         "img-src": ["'self'", "data:"],
         "font-src": ["'self'", "data:"],
         "object-src": ["'none'"],
         "frame-ancestors": ["'none'"],
         "base-uri": ["'self'"],
-        "form-action": ["'self'"]
+        "form-action": ["'self'"],
+        "connect-src": ["'self'"]
       }
     },
     referrerPolicy: { policy: "no-referrer" },
+    strictTransportSecurity: USE_SECURE_COOKIES ? undefined : false,
     crossOriginEmbedderPolicy: false
   }));
 } else {
@@ -612,6 +568,7 @@ if (IS_PROD) {
   app.use(helmet({
     contentSecurityPolicy: false,
     referrerPolicy: { policy: "no-referrer" },
+    strictTransportSecurity: USE_SECURE_COOKIES ? undefined : false,
     crossOriginEmbedderPolicy: false
   }));
 }
@@ -620,32 +577,40 @@ if (IS_PROD) {
 app.use(compression());
 
 // Body parsers – OWASP A04: limitar tamaño de petición para evitar DOS
-app.use(express.json({ limit: "25mb" }));
+const normalJson = express.json({limit:"256kb"});
+const restoreJson = express.json({limit:"70mb"});
+app.use((req,res,next)=>(req.path==="/api/backup/restore"?restoreJson:normalJson)(req,res,next));
 app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
-app.use(cookieParser());
 
-// OWASP A07: configuración robusta de sesión
-const SESSION_SECRET = process.env.SESSION_SECRET;
-if (!SESSION_SECRET && IS_PROD) {
-  console.warn(
-    '[WARN] SESSION_SECRET no está definido en producción. ' +
-    'Define una variable de entorno segura para evitar secretos débiles.'
-  );
-}
+// Una conexión SQLite compartida requiere serializar los controladores para aislar transacciones.
+let apiQueue = Promise.resolve();
+app.use((req, res, next) => {
+  if (req.path.startsWith('/assets/')) return next();
+  res.set('Cache-Control', 'no-store');
+  const previous = apiQueue;
+  let release;
+  apiQueue = new Promise(resolve => { release = resolve; });
+  res.once('finish', release);
+  res.once('close', release);
+  previous.then(() => { if (!res.destroyed) next(); else release(); }).catch(next);
+});
 
-app.use(session({
+const sessionStore = createSessionStore(session.Store, path.join(DATA_DIR, 'sessions.db'));
+const sessionMiddleware = session({
   name: 'brumapp.sid',
-  secret: SESSION_SECRET || 'dev_secret_change_me',
+  secret: SESSION_SECRET,
+  store: sessionStore,
   resave: false,
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: USE_SECURE_COOKIES ? 'auto' : false,
+    secure: USE_SECURE_COOKIES,
     maxAge: 1000 * 60 * 60 * 8 // 8 horas
   }
-}));
+});
+app.use((req,res,next)=>req.path.startsWith('/assets/')?next():sessionMiddleware(req,res,next));
 
 // -----------------------------------------------------------------------------
 // Rate limits – OWASP A05/A10: protección básica frente a fuerza bruta y DOS
@@ -671,9 +636,7 @@ app.use(['/api/auth/login', '/login'], loginLimiter);
 // -----------------------------------------------------------------------------
 function ensureCsrf(req, res, next) {
   if (!req.session.csrf) {
-    req.session.csrf =
-      Math.random().toString(36).slice(2) +
-      Math.random().toString(36).slice(2);
+    req.session.csrf = crypto.randomBytes(32).toString('hex');
   }
   next();
 }
@@ -681,9 +644,11 @@ function ensureCsrf(req, res, next) {
 function csrfProtect(req, res, next) {
   const m = (req.method || 'GET').toUpperCase();
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(m)) {
+    const origin=req.get('origin');
+    if(origin){try{if(new URL(origin).host!==req.get('host')) return res.status(403).json({error:'forbidden'});}catch{return res.status(403).json({error:'forbidden'});}}
     if (req.path === '/api/auth/login' || req.path === '/login') return next();
     const token = req.get('x-csrf-token');
-    if (!token || token !== req.session.csrf) {
+    if (!token || token !== req.session?.csrf) {
       return res.status(403).json({ error: 'bad-csrf' });
     }
   }
@@ -691,10 +656,19 @@ function csrfProtect(req, res, next) {
 }
 
 app.get('/csrf', ensureCsrf, (req, res) =>
-  res.json({ token: req.session.csrf || '' })
+  res.set('Cache-Control', 'no-store').json({ token: req.session.csrf || '' })
 );
 
 app.use(csrfProtect);
+app.use(async (req, res, next) => {
+  if (req.session?.user && (req.path.startsWith('/api') || ['/me','/panel','/panel.html'].includes(req.path))) {
+    const user = await db.get('SELECT id,username,role FROM users WHERE id=?', [req.session.user.id]);
+    req.session.user = user || null;
+  }
+  next();
+});
+app.get(['/panel.html','/panel'], (req, res, next) => req.session.user ? next() : res.redirect('/'));
+
 
 // -----------------------------------------------------------------------------
 // Static – sirve todo lo de /public (HTML, CSS, JS, imágenes)
@@ -708,7 +682,7 @@ app.use(express.static(PUBLIC_DIR, {
     if (p.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-store');
     } else {
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cache-Control', /\.(js|css)$/.test(p) ? 'public, max-age=0, must-revalidate' : 'public, max-age=86400');
     }
   }
 }));
@@ -769,6 +743,7 @@ async function loginHandler(req, res) {
   const { username, password } = req.body || {};
   const uname = String(username || '').toLowerCase().trim();
   const isJson = !!req.is('application/json');
+  if(!/^[a-z0-9._-]{3,32}$/.test(uname) || typeof password!=='string' || Buffer.byteLength(password)>72) return isJson?res.status(401).json({error:'bad-credentials'}):res.redirect('/?error=1');
 
   const now = Math.floor(Date.now() / 1000);
   let lock = await getLock(uname);
@@ -812,6 +787,7 @@ async function loginHandler(req, res) {
   lock.locked_until = 0;
   await saveLock(lock);
 
+  await new Promise((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
   req.session.user = { id: user.id, username: user.username, role: user.role };
   await logEvent(req, { action: 'login', entity: 'auth', entityId: user.id });
   if (isJson) {
@@ -825,11 +801,11 @@ app.post('/login', loginHandler);
 
 app.post('/api/auth/logout', requireAuth, async (req, res) => {
   await logEvent(req, { action: 'logout', entity: 'auth', entityId: req.session.user?.id });
-  req.session.destroy(() => res.json({ ok: true }));
+  req.session.destroy(() => { res.clearCookie('brumapp.sid'); res.json({ ok: true }); });
 });
 
 app.get('/me', (req, res) => {
-  res.json({ user: req.session.user || null });
+  res.set('Cache-Control', 'no-store').json({ user: req.session.user || null });
 });
 
 // -----------------------------------------------------------------------------
@@ -839,13 +815,7 @@ app.get('/api/backup/download', requireRole('supervisor'), async (req, res) => {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const snapFile = path.join(DATA_DIR, `brumapp_backup_${ts}.db`);
 
-  try {
-    await db.exec(`VACUUM INTO '${escapeSqliteString(snapFile)}'`);
-  } catch (e) {
-    // Fallback: copia directa (menos robusta que VACUUM INTO)
-    try { await db.exec('PRAGMA wal_checkpoint(FULL)'); } catch (_) {}
-    fs.copyFileSync(DB_FILE, snapFile);
-  }
+  await db.exec(`VACUUM INTO '${escapeSqliteString(snapFile)}'`);
 
   await logEvent(req, { action: 'backup_download', entity: 'database', detail: `file=${path.basename(snapFile)}` });
 
@@ -856,61 +826,60 @@ app.get('/api/backup/download', requireRole('supervisor'), async (req, res) => {
   stream.on('error', () => res.status(500).end());
   stream.pipe(res);
 
-  res.on('finish', () => {
-    fs.unlink(snapFile, () => {});
-  });
+  res.on('close', () => { fs.unlink(snapFile, () => {}); });
 });
 
 app.post('/api/backup/restore', requireRole('supervisor'), async (req, res) => {
-  if (RESTORE_IN_PROGRESS) return res.status(409).json({ error: 'restore_in_progress' });
   RESTORE_IN_PROGRESS = true;
-
+  let candidate;
+  let pre;
+  let replaced = false;
+  let closed = false;
+  let temporary;
   try {
     const { fileBase64, filename } = req.body || {};
-    if (!fileBase64 || typeof fileBase64 !== 'string') {
-      return res.status(400).json({ error: 'invalid' });
+    if (typeof fileBase64 !== 'string' || !fileBase64) return res.status(400).json({ error: 'invalid' });
+    const buffer = Buffer.from(fileBase64, 'base64');
+    if (buffer.length < 100 || buffer.length > 50 * 1024 * 1024) return res.status(400).json({ error: 'size' });
+    if (buffer.subarray(0, 16).toString() !== 'SQLite format 3\0') return res.status(400).json({ error: 'not_sqlite' });
+    const stamp = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    temporary = path.join(DATA_DIR, `__restore_${stamp}.db`);
+    fs.writeFileSync(temporary, buffer);
+    candidate = await openDatabase(temporary, { readOnly: true });
+    const integrity = await candidate.get('PRAGMA quick_check');
+    const tables = await candidate.all("SELECT name FROM sqlite_master WHERE type='table'");
+    const names = new Set(tables.map(row => row.name));
+    if (Object.values(integrity)[0] !== 'ok' || !['users','recepciones','stock_productos'].every(name => names.has(name))) {
+      return res.status(400).json({ error: 'invalid-backup' });
     }
-
-    const buf = Buffer.from(fileBase64, 'base64');
-    if (buf.length < 100 || buf.length > 50 * 1024 * 1024) {
-      return res.status(400).json({ error: 'size' });
-    }
-
-    const sig = buf.slice(0, 16).toString('utf8');
-    if (!sig.startsWith('SQLite format 3')) {
-      return res.status(400).json({ error: 'not_sqlite' });
-    }
-
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const tmpFile = path.join(DATA_DIR, `__restore_${ts}.db`);
-    fs.writeFileSync(tmpFile, buf);
-
-    const pre = path.join(DATA_DIR, `brumapp_pre_restore_${ts}.db`);
-    try { fs.copyFileSync(DB_FILE, pre); } catch (_) {}
-
-    // Cerrar y reemplazar
-    try { await db.close(); } catch (_) {}
-    try { fs.renameSync(tmpFile, DB_FILE); } catch (e) {
-      // si rename falla (FS), intentamos copy + unlink
-      fs.copyFileSync(tmpFile, DB_FILE);
-      fs.unlinkSync(tmpFile);
-    }
-
-    // Reabrir y garantizar esquema
-    db = await open({ filename: DB_FILE, driver: sqlite3.Database });
+    const supervisor = await candidate.get("SELECT id FROM users WHERE role='supervisor' LIMIT 1");
+    if (!supervisor) return res.status(400).json({ error: 'invalid-backup' });
+    await candidate.close(); candidate = null;
+    pre = path.join(DATA_DIR, `brumapp_pre_restore_${stamp}.db`);
+    await db.exec(`VACUUM INTO '${escapeSqliteString(pre)}'`);
+    await db.close(); closed = true;
+    for (const suffix of ['-wal','-shm']) fs.rmSync(DB_FILE + suffix, { force: true });
+    fs.renameSync(temporary, DB_FILE); replaced = true;
+    db = await openDatabase(DB_FILE);
+    await db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
     await ensureSchemaAfterRestore();
-
-    await logEvent(req, {
-      action: 'backup_restore',
-      entity: 'database',
-      detail: `from=${String(filename || '').slice(0, 128)} pre=${path.basename(pre)}`
-    });
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('Restore error:', e);
-    res.status(500).json({ error: 'restore_failed' });
+    await logEvent(req, { action: 'backup_restore', entity: 'database', detail: `from=${safeText(filename,128)} pre=${path.basename(pre)}` });
+    await new Promise((resolve, reject) => sessionStore.clear(error => error ? reject(error) : resolve()));
+    await new Promise(resolve => req.session.destroy(resolve));
+    res.clearCookie('brumapp.sid').json({ ok: true, reauthenticate: true });
+  } catch (error) {
+    if (closed && pre) {
+      try { await db.close(); } catch {}
+      for (const suffix of ['-wal','-shm']) fs.rmSync(DB_FILE + suffix, { force: true });
+      if (replaced) fs.copyFileSync(pre, DB_FILE);
+      db = await openDatabase(DB_FILE);
+      await db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+    }
+    console.error('Restore error:', error.message);
+    res.status(replaced ? 500 : 400).json({ error: 'restore_failed' });
   } finally {
+    if (candidate) await candidate.close().catch(() => {});
+    if (temporary) fs.rmSync(temporary, { force: true });
     RESTORE_IN_PROGRESS = false;
   }
 });
@@ -982,88 +951,10 @@ app.get('/api/event-logs.xlsx', requireRole('supervisor'), async (req, res) => {
 
 // Reconstruye stock completo (útil post-restore o migraciones)
 async function rebuildAllStock() {
-  try {
-    const tipos = await db.all('SELECT DISTINCT tipo FROM recepciones');
-    for (const row of (tipos || [])) {
-      if (row?.tipo) await rebuildStockForTipo(row.tipo);
-    }
-    await db.run("DELETE FROM stock_productos WHERE LOWER(tipo) NOT IN (SELECT LOWER(tipo) FROM recepciones)");
-  } catch (_) {}
+  const types = await db.all('SELECT tipo FROM recepciones UNION SELECT tipo FROM pro_materiales');
+  for (const row of types) await rebuildStockForTipo(row.tipo);
 }
-
-// Stock derivado: stock = SUM(recepciones) - SUM(retiros)
-async function rebuildStockForTipo(tipo) {
-  const t = String(tipo || '').trim();
-  if (!t) return;
-
-  const lastRec = await db.get(
-    "SELECT tipo, unidad, etiqueta FROM recepciones WHERE LOWER(tipo)=LOWER(?) ORDER BY created_at DESC, id DESC LIMIT 1",
-    [t]
-  );
-
-  // Si ya no existe recepción para ese tipo, eliminar stock (retiros se mantienen como auditoría)
-  if (!lastRec) {
-    await db.run("DELETE FROM stock_productos WHERE LOWER(tipo)=LOWER(?)", [t]);
-    return;
-  }
-
-  // Si existe un ajuste de stock, se toma como base y se ignora el historial previo.
-  // A partir del ajuste, se acumulan nuevos ingresos (movimientos) y retiros posteriores.
-  const lastAdj = await db.get(
-    "SELECT cantidad, created_at FROM stock_ajustes WHERE LOWER(tipo)=LOWER(?) ORDER BY created_at DESC, id DESC LIMIT 1",
-    [t]
-  );
-
-  let qty = 0;
-
-  if (lastAdj && lastAdj.created_at) {
-    const base = Number(lastAdj.cantidad || 0);
-    const ts = String(lastAdj.created_at);
-
-    const addMov = await db.get(
-      "SELECT COALESCE(SUM(delta),0) AS total FROM recepciones_movimientos WHERE LOWER(tipo)=LOWER(?) AND delta > 0 AND (action='add' OR action='create') AND created_at >= ?",
-      [t, ts]
-    );
-    const sumRetAfter = await db.get(
-      "SELECT COALESCE(SUM(cantidad),0) AS total FROM stock_retiros WHERE LOWER(tipo)=LOWER(?) AND created_at >= ?",
-      [t, ts]
-    );
-
-    const added = Number(addMov?.total || 0);
-    const withdrawn = Number(sumRetAfter?.total || 0);
-    qty = Math.max(0, base + added - withdrawn);
-  } else {
-    const sumRec = await db.get(
-      "SELECT COALESCE(SUM(cantidad),0) AS total FROM recepciones WHERE LOWER(tipo)=LOWER(?)",
-      [t]
-    );
-    const sumRet = await db.get(
-      "SELECT COALESCE(SUM(cantidad),0) AS total FROM stock_retiros WHERE LOWER(tipo)=LOWER(?)",
-      [t]
-    );
-
-    const received = Number(sumRec?.total || 0);
-    const withdrawn = Number(sumRet?.total || 0);
-    qty = Math.max(0, received - withdrawn);
-  }
-
-  const existing = await db.get(
-    "SELECT id FROM stock_productos WHERE LOWER(tipo)=LOWER(?) LIMIT 1",
-    [t]
-  );
-
-  if (existing) {
-    await db.run(
-      "UPDATE stock_productos SET tipo=?, etiqueta=?, cantidad=?, unidad=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-      [String(lastRec.tipo || t), String(lastRec.etiqueta || ''), qty, String(lastRec.unidad || ''), existing.id]
-    );
-  } else {
-    await db.run(
-      "INSERT INTO stock_productos(tipo, etiqueta, cantidad, unidad) VALUES(?,?,?,?)",
-      [String(lastRec.tipo || t), String(lastRec.etiqueta || ''), qty, String(lastRec.unidad || '')]
-    );
-  }
-}
+async function rebuildStockForTipo(tipo) { return rebuildMaterialStock(db, tipo); }
 
 app.get('/api/recepciones', requireAuth, async (req, res) => {
   const { from, to, q, min, max } = req.query || {};
@@ -1164,16 +1055,13 @@ if (!String(confirm_update || '').trim()) {
     [t, et, c, f, u]
   );
 
+  await db.run("INSERT INTO recepciones_movimientos(tipo,etiqueta,delta,fecha,unidad,action,ref_recepcion_id) VALUES(?,?,?,?,?,?,?)", [t,et,c,f,u,existingRef ? 'add' : 'create',r.lastID]);
   // Recalcular stock y obtener total resultante
   await rebuildStockForTipo(t);
   const st = await db.get("SELECT cantidad FROM stock_productos WHERE LOWER(tipo)=LOWER(?) ORDER BY id ASC LIMIT 1", [t]);
   const totalNow = Number(st?.cantidad || 0);
 
-  // Guardar movimiento de entrada
-  await db.run(
-    "INSERT INTO recepciones_movimientos(tipo, etiqueta, delta, total, fecha, unidad, action, ref_recepcion_id) VALUES(?,?,?,?,?,?,?,?)",
-    [t, et, c, totalNow, f, u, existingRef ? 'add' : 'create', r?.lastID]
-  );
+  await db.run('UPDATE recepciones_movimientos SET total=? WHERE ref_recepcion_id=?', [totalNow,r.lastID]);
 
   await logEvent(req, {
     action: existingRef ? 'add' : 'create',
@@ -1231,7 +1119,7 @@ app.post('/api/recepciones/ajuste', requireRole('supervisor', 'administrador'), 
   const prevQty = Number(stock?.cantidad || 0);
 
   await db.run(
-    "INSERT INTO stock_ajustes(tipo, cantidad, unidad) VALUES(?,?,?)",
+    "INSERT INTO stock_ajustes(tipo,cantidad,unidad,recepcion_cursor,retiro_cursor) VALUES(?,?,?,(SELECT COALESCE(MAX(id),0) FROM recepciones_movimientos),(SELECT COALESCE(MAX(id),0) FROM stock_retiros))",
     [t, c, expectedUnit || u]
   );
 
@@ -1306,7 +1194,7 @@ app.put('/api/recepciones/:id', requireRole('supervisor', 'administrador'), asyn
 	  // Ajuste absoluto de stock: a partir de este punto el stock pasa a ser el valor indicado.
 	  // Se ignora el historial previo (entradas/retiros anteriores) y desde aquí se aplican nuevos movimientos.
 	  try {
-	    await db.run("INSERT INTO stock_ajustes(tipo, cantidad, unidad) VALUES(?,?,?)", [t, c, u]);
+	    await saveStockAdjustment(db,t,c,u);
 	  } catch (_) {}
 
   await logEvent(req, { action: 'update', entity: 'recepciones', entityId: id, detail: JSON.stringify({ tipo: t, etiqueta: et, cantidad: c, fecha: f, unidad: u }) });
@@ -1639,28 +1527,34 @@ app.get('/api/defectuosos', requireAuth, async (req, res) => {
   res.json({ items: list });
 });
 
-app.post('/api/defectuosos', requireRole('supervisor', 'administrador'), async (req, res) => {
-  const { tipo, cantidad, razon, fecha, unidad } = req.body || {};
-  const c = parseInt(cantidad, 10);
-  const t = String(tipo || '').slice(0, 64);
-  const r = String(razon || '').slice(0, 256);
-  const f = String(fecha || '').slice(0, 32);
-  const u = String(unidad || '').slice(0, 16);
-
-  if (!Number.isFinite(c) || c <= 0 || !t || !f) {
-    return res.status(400).json({ error: 'invalid' });
-  }
-
-  const rr = await db.run(
-    "INSERT INTO defectuosos(tipo,cantidad,razon,fecha,unidad) VALUES(?,?,?,?,?)",
-    [t, c, r, f, u]
-  );
-  await logEvent(req, { action: 'create', entity: 'defectuosos', entityId: String(rr.lastID), detail: JSON.stringify({ tipo: t, cantidad: c, razon: r, fecha: f, unidad: u }) });
-  res.json({ ok: true });
+app.post('/api/defectuosos', requireRole('supervisor','administrador'), async (req,res)=>{
+  const b=req.body||{};
+  if(!nonNegativeInteger(b.cantidad) || Number(b.cantidad)<=0 || !safeText(b.tipo) || !safeText(b.fecha)) return res.status(400).json({error:'invalid'});
+  const discount=String(b.descontar_stock||'')==='1';
+  const material=discount?await findMaterialByCodeOrName(b.tipo):null;
+  if(discount&&!material) return res.status(404).json({error:'material-not-found'});
+  if(material&&b.unidad!==material.unidad) return res.status(409).json({error:'unit_mismatch'});
+  const tipo=material?.tipo||safeText(b.tipo,180);
+  const quantity=Number(b.cantidad);
+  if(discount&&(await getStockForTipo(tipo))<quantity) return res.status(409).json({error:'stock-insuficiente',stock:await getStockForTipo(tipo)});
+  await db.exec('BEGIN IMMEDIATE');
+  try {
+    const result=await db.run('INSERT INTO defectuosos(tipo,cantidad,razon,fecha,unidad,stock_descontado) VALUES(?,?,?,?,?,?)',[tipo,quantity,safeText(b.razon,256),safeText(b.fecha,32),safeText(b.unidad,40),discount?1:0]);
+    if(discount) {
+      await db.run('INSERT INTO stock_retiros(tipo,cantidad,unidad,fecha) VALUES(?,?,?,?)',[tipo,quantity,material.unidad,b.fecha]);
+      await rebuildStockForTipo(tipo);
+      await recordKardex(req,{codigo_barra:material.codigo_barra||'',tipo,movimiento:'descarte',salida:quantity,unidad:material.unidad,referencia:`DESC-${result.lastID}`,observacion:safeText(b.razon,256),fecha:b.fecha});
+    }
+    await logEvent(req,{action:'create',entity:'defectuosos',entityId:result.lastID});
+    await db.exec('COMMIT');res.json({ok:true,id:result.lastID});
+  } catch(error){await db.exec('ROLLBACK');throw error;}
 });
 
 app.put('/api/defectuosos/:id', requireRole('supervisor', 'administrador'), async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  const item = await db.get('SELECT stock_descontado FROM defectuosos WHERE id=?',[id]);
+  if(!item) return res.status(404).json({error:'not-found'});
+  if(item.stock_descontado) return res.status(409).json({error:'discounted-record'});
   const { tipo, cantidad, razon, fecha, unidad } = req.body || {};
   const c = parseInt(cantidad, 10);
   const t = String(tipo || '').slice(0, 64);
@@ -1681,6 +1575,9 @@ app.put('/api/defectuosos/:id', requireRole('supervisor', 'administrador'), asyn
 
 app.delete('/api/defectuosos/:id', requireRole('supervisor', 'administrador'), async (req, res) => {
   const id = parseInt(req.params.id, 10);
+  const item = await db.get('SELECT stock_descontado FROM defectuosos WHERE id=?',[id]);
+  if(!item) return res.status(404).json({error:'not-found'});
+  if(item.stock_descontado) return res.status(409).json({error:'discounted-record'});
   if (!id) return res.status(400).json({ error: 'invalid' });
   await db.run("DELETE FROM defectuosos WHERE id=?", [id]);
   res.json({ ok: true });
@@ -1812,7 +1709,9 @@ function drawTable(doc, headers, widths, rowValues) {
 
   // Asegura que widths sume aproximadamente el ancho disponible
   // (si no coincide, PDFKit igual respeta los widths declarados)
-  const headerH = 20;
+  const totalWidth = widths.reduce((sum,width) => sum + width,0);
+  widths = widths.map(width => width * tableWidth / totalWidth);
+  const headerH = 26;
   const minRowH = 18;
 
   let y = doc.y;
@@ -1890,14 +1789,7 @@ function drawTable(doc, headers, widths, rowValues) {
 // Exportación XLSX (Excel)
 // -----------------------------------------------------------------------------
 function sendXlsx(res, filename, sheets) {
-  // sheets: Array<{ name: string, aoa: any[][] }>
-  const wb = XLSX.utils.book_new();
-  for (const s of sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(s.aoa);
-    XLSX.utils.book_append_sheet(wb, ws, s.name);
-  }
-
-  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+  const buf = createWorkbook(sheets);
   res.setHeader(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -1917,7 +1809,7 @@ function formatTsLima(ts) {
     if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(s)) {
       d = new Date(s.replace(' ', 'T') + 'Z'); // interpretar como UTC
     } else {
-      d = new Date(s);
+      d = new Date(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(s)?s+'-05:00':s);
     }
   } else {
     d = new Date(ts);
@@ -2440,7 +2332,7 @@ app.get('/api/users', requireRole('supervisor'), async (req, res) => {
 
 app.post('/api/users', requireRole('supervisor'), async (req, res) => {
   const { username, password, role } = req.body || {};
-  const uname = String(username || '').toLowerCase();
+  const uname = String(username || '').trim().toLowerCase();
 
   // No permitir clonar el usuario protegido
   if (uname === PROTECTED_SUPERVISOR_USERNAME) {
@@ -2453,7 +2345,8 @@ app.post('/api/users', requireRole('supervisor'), async (req, res) => {
   if (!['operario', 'supervisor', 'administrador'].includes(role)) {
     return res.status(400).json({ error: 'invalid-role' });
   }
-  const hp = await bcrypt.hash(String(password || 'admin'), 10);
+  if (!validPassword(password)) return res.status(400).json({ error: 'weak-password' });
+  const hp = await bcrypt.hash(password, 12);
   const rr = await db.run(
     "INSERT INTO users(username,password,role,is_protected) VALUES(?,?,?,0)",
     [uname, hp, role]
@@ -2475,6 +2368,7 @@ app.put('/api/users/:id', requireRole('supervisor'), async (req, res) => {
     return res.status(403).json({ error: 'protected-user' });
   }
 
+  if(target.role==='supervisor'&&role!=='supervisor'){const others=await db.get("SELECT COUNT(*) AS c FROM users WHERE role='supervisor' AND id<>?",[id]);if(!others.c)return res.status(409).json({error:'must-keep-supervisor'});}
   await db.run("UPDATE users SET role=? WHERE id=?", [role, id]);
   await logEvent(req, { action: 'update', entity: 'users', entityId: id, detail: JSON.stringify({ role }) });
   res.json({ ok: true });
@@ -2512,21 +2406,29 @@ app.patch('/api/users/:id/password', requireRole('supervisor'), async (req, res)
 
   const target = await db.get("SELECT id, username, is_protected FROM users WHERE id=?", [id]);
   if (!target) return res.status(404).json({ error: 'not-found' });
-  if (Number(target.is_protected || 0) === 1) {
-    return res.status(403).json({ error: 'protected-user' });
-  }
 
-  const hp = await bcrypt.hash(String(password || 'admin'), 10);
+  if (!validPassword(password)) return res.status(400).json({ error: 'weak-password' });
+  const hp = await bcrypt.hash(password, 12);
   await db.run("UPDATE users SET password=? WHERE id=?", [hp, id]);
   await logEvent(req, { action: 'update_password', entity: 'users', entityId: id });
   res.json({ ok: true });
 });
 
 
+app.patch('/api/auth/password', requireAuth, async (req,res) => {
+  const { current_password, password }=req.body||{};
+  if(!validPassword(password)) return res.status(400).json({error:'weak-password'});
+  const user=await db.get('SELECT password FROM users WHERE id=?',[req.session.user.id]);
+  if(!await bcrypt.compare(String(current_password||''),user.password)) return res.status(403).json({error:'incorrect-password'});
+  await db.run('UPDATE users SET password=? WHERE id=?',[await bcrypt.hash(password,12),req.session.user.id]);
+  await logEvent(req,{action:'update_password',entity:'users',entityId:req.session.user.id});
+  res.json({ok:true});
+});
+
 // -----------------------------------------------------------------------------
 // Módulo PRO: almacén, trazabilidad, códigos de barra y gestión operativa
 // -----------------------------------------------------------------------------
-await db.exec(`
+const PRO_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS pro_proveedores(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nombre TEXT NOT NULL,
@@ -2667,62 +2569,31 @@ CREATE TABLE IF NOT EXISTS pro_envios_terminados(
 );
 CREATE INDEX IF NOT EXISTS idx_pro_envios_terminados_producto ON pro_envios_terminados(producto);
 CREATE INDEX IF NOT EXISTS idx_pro_envios_terminados_fecha ON pro_envios_terminados(fecha);
-`);
+`;
+await db.exec(PRO_SCHEMA_SQL);
 
 // Migraciones no destructivas del módulo Almacén para bases de datos existentes
 await ensureColumn('pro_ordenes_produccion', 'fecha_inicio', 'TEXT');
 await ensureColumn('pro_ordenes_produccion', 'fecha_final', 'TEXT');
 await ensureColumn('pro_productos_terminados', 'activo', 'INTEGER NOT NULL DEFAULT 1');
+await rebuildAllStock();
 
 function safeText(v, max=255){ return String(v ?? '').trim().slice(0,max); }
 function safeInt(v, def=0){ const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : def; }
 function safeFloat(v, def=0){ const n = Number(v); return Number.isFinite(n) ? n : def; }
-function nowLocalISO(){ return new Date().toISOString().slice(0,16); }
+function nowLocalISO(){ return localISO(); }
 async function getStockForTipo(tipo){
   const row = await db.get("SELECT cantidad FROM stock_productos WHERE LOWER(tipo)=LOWER(?) LIMIT 1", [tipo]);
   return safeInt(row?.cantidad, 0);
 }
 
-async function findMaterialByCodeOrName(value){
-  const q = safeText(value, 180);
-  if (!q) return null;
-  return await db.get(`
-    SELECT * FROM pro_materiales
-    WHERE activo=1 AND (
-      LOWER(COALESCE(codigo_barra,''))=LOWER(?)
-      OR LOWER(tipo)=LOWER(?)
-      OR LOWER(tipo) LIKE LOWER(?)
-    )
-    ORDER BY
-      CASE
-        WHEN LOWER(COALESCE(codigo_barra,''))=LOWER(?) THEN 0
-        WHEN LOWER(tipo)=LOWER(?) THEN 1
-        ELSE 2
-      END,
-      tipo ASC
-    LIMIT 1`, [q, q, `${q}%`, q, q]);
+async function findMaterialByCodeOrName(value) {
+  const q = safeText(value,180);
+  return db.get("SELECT * FROM pro_materiales WHERE activo=1 AND (LOWER(codigo_barra)=LOWER(?) OR LOWER(tipo)=LOWER(?)) LIMIT 1", [q,q]);
 }
-
-async function findProductoTerminadoByCodeOrName(value){
-  const q = safeText(value, 180);
-  if (!q) return null;
-  return await db.get(`
-    SELECT pt.*, c.nombre AS cliente
-    FROM pro_productos_terminados pt
-    LEFT JOIN pro_clientes c ON c.id=pt.cliente_id
-    WHERE COALESCE(pt.activo,1)=1 AND (
-      LOWER(COALESCE(pt.codigo_barra,''))=LOWER(?)
-      OR LOWER(pt.producto)=LOWER(?)
-      OR LOWER(pt.producto) LIKE LOWER(?)
-    )
-    ORDER BY
-      CASE
-        WHEN LOWER(COALESCE(pt.codigo_barra,''))=LOWER(?) THEN 0
-        WHEN LOWER(pt.producto)=LOWER(?) THEN 1
-        ELSE 2
-      END,
-      pt.producto ASC
-    LIMIT 1`, [q, q, `${q}%`, q, q]);
+async function findProductoTerminadoByCodeOrName(value) {
+  const q = safeText(value,180);
+  return db.get("SELECT pt.*,c.nombre AS cliente FROM pro_productos_terminados pt LEFT JOIN pro_clientes c ON c.id=pt.cliente_id WHERE COALESCE(pt.activo,1)=1 AND (LOWER(pt.codigo_barra)=LOWER(?) OR LOWER(pt.producto)=LOWER(?)) LIMIT 1", [q,q]);
 }
 
 async function recordProductoTerminadoMovimiento(req, { producto_id=null, codigo_barra='', producto, movimiento, entrada=0, salida=0, saldo=0, unidad='', cliente_id=null, cliente='', referencia='', observacion='', fecha='' }){
@@ -2755,7 +2626,8 @@ function crudRoutes({ base, table, fields, searchable=['nombre'] }){
     res.json({ items: rows || [] });
   });
   app.post(`/api/pro/${base}`, requireRole('supervisor','administrador'), async (req, res) => {
-    const vals = fields.map(f => req.body?.[f] ?? '');
+    if (!safeText(req.body?.nombre,160)) return res.status(400).json({error:'name-required'});
+    const vals = fields.map(f => safeText(req.body?.[f], f === 'observaciones' ? 500 : 180));
     const placeholders = fields.map(() => '?').join(',');
     const sql = `INSERT INTO ${table}(${fields.join(',')}) VALUES(${placeholders})`;
     const r = await db.run(sql, vals);
@@ -2764,7 +2636,10 @@ function crudRoutes({ base, table, fields, searchable=['nombre'] }){
   });
   app.put(`/api/pro/${base}/:id`, requireRole('supervisor','administrador'), async (req, res) => {
     const id = safeInt(req.params.id);
-    const vals = fields.map(f => req.body?.[f] ?? '');
+    if (!safeText(req.body?.nombre,160)) return res.status(400).json({error:'name-required'});
+    const vals = fields.map(f => safeText(req.body?.[f], f === 'observaciones' ? 500 : 180));
+    const existing = await db.get(`SELECT id FROM ${table} WHERE id=?`,[id]);
+    if(!existing) return res.status(404).json({error:'not-found'});
     const set = fields.map(f => `${f}=?`).join(',');
     await db.run(`UPDATE ${table} SET ${set}, updated_at=CURRENT_TIMESTAMP WHERE id=?`, [...vals, id]);
     await logEvent(req, { action:'update', entity:`pro_${base}`, entityId:id, detail: JSON.stringify(req.body || {}) });
@@ -2772,18 +2647,24 @@ function crudRoutes({ base, table, fields, searchable=['nombre'] }){
   });
   app.delete(`/api/pro/${base}/:id`, requireRole('supervisor'), async (req, res) => {
     const id = safeInt(req.params.id);
-    await db.run(`DELETE FROM ${table} WHERE id=?`, [id]);
+    const references = base === 'proveedores' ? await db.get('SELECT COUNT(*) AS c FROM pro_materiales WHERE proveedor_id=?',[id]) : await db.get('SELECT (SELECT COUNT(*) FROM pro_productos_terminados WHERE cliente_id=?) + (SELECT COUNT(*) FROM pro_envios_terminados WHERE cliente_id=?) AS c',[id,id]);
+    if(references.c) return res.status(409).json({error:'record-in-use'});
+    const deleted=await db.run(`DELETE FROM ${table} WHERE id=?`, [id]);
+    if(!deleted.changes) return res.status(404).json({error:'not-found'});
     await logEvent(req, { action:'delete', entity:`pro_${base}`, entityId:id });
     res.json({ ok:true });
   });
 }
 
-crudRoutes({ base:'proveedores', table:'pro_proveedores', fields:['nombre','ruc','telefono','correo','contacto','observaciones'], searchable:['nombre','ruc','telefono','contacto'] });
-crudRoutes({ base:'clientes', table:'pro_clientes', fields:['nombre','documento','telefono','correo','direccion','contacto','observaciones'], searchable:['nombre','documento','telefono','contacto'] });
+crudRoutes({ base:'proveedores', table:'pro_proveedores', fields:['nombre','ruc','telefono','correo','contacto','observaciones'], searchable:['nombre','ruc','telefono','contacto','correo'] });
+crudRoutes({ base:'clientes', table:'pro_clientes', fields:['nombre','documento','telefono','correo','direccion','contacto','observaciones'], searchable:['nombre','documento','telefono','contacto','correo','direccion'] });
 
 app.get('/api/pro/materiales', requireAuth, async (req, res) => {
-  const { q, from, to } = req.query || {};
-  const clauses = ["m.activo=1"];
+  const { q, from, to, stock } = req.query || {};
+  const clauses = [stock==='ARCHIVED'?"m.activo=0":"m.activo=1"];
+  if(stock==='CRITICO')clauses.push('COALESCE(s.cantidad,0)<=m.stock_crit');
+  if(stock==='BAJO')clauses.push('COALESCE(s.cantidad,0)>m.stock_crit AND COALESCE(s.cantidad,0)<=m.stock_min');
+  if(stock==='OK')clauses.push('COALESCE(s.cantidad,0)>m.stock_min');
   const params = [];
   const sWhere = buildTextSearchWhere(q, ['m.tipo','m.codigo_barra','m.categoria','m.ubicacion','m.etiqueta','p.nombre']);
   if (sWhere.clause) { clauses.push(sWhere.clause); params.push(...sWhere.params); }
@@ -2791,7 +2672,9 @@ app.get('/api/pro/materiales', requireAuth, async (req, res) => {
   if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
   const rows = await db.all(`
     SELECT m.*, COALESCE(s.cantidad,0) AS stock_actual, p.nombre AS proveedor,
-      CASE WHEN COALESCE(s.cantidad,0) <= m.stock_min THEN 'BAJO'
+      CASE WHEN m.activo=0 THEN 'ARCHIVED'
+           WHEN COALESCE(s.cantidad,0) <= m.stock_crit THEN 'CRITICO'
+           WHEN COALESCE(s.cantidad,0) <= m.stock_min THEN 'BAJO'
            ELSE 'OK' END AS estado_stock
     FROM pro_materiales m
     LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo)
@@ -2815,11 +2698,15 @@ app.post('/api/pro/materiales', requireRole('supervisor','administrador'), async
   const codigo = safeText(b.codigo_barra, 80) || null;
   const unidad = safeText(b.unidad, 40);
   const etiqueta = safeText(b.etiqueta, 180);
-  const stockInicial = safeInt(b.stock_inicial, 0);
+  if (!unidad || !nonNegativeInteger(b.stock_inicial ?? 0) || !nonNegativeInteger(b.stock_min ?? 0) || !nonNegativeInteger(b.stock_crit ?? 0) || Number(b.stock_crit || 0) > Number(b.stock_min || 0)) return res.status(400).json({ error:'invalid' });
+  const duplicate = await db.get('SELECT id FROM pro_materiales WHERE LOWER(tipo)=LOWER(?)', [tipo]);
+  if (duplicate) return res.status(409).json({error:'duplicate-record'});
+  if(b.proveedor_id && !await db.get('SELECT id FROM pro_proveedores WHERE id=?',[safeInt(b.proveedor_id)]))return res.status(400).json({error:'invalid'});
+  const stockInicial = Number(b.stock_inicial || 0);
   await db.exec('BEGIN IMMEDIATE');
   try {
     const r = await db.run(`INSERT INTO pro_materiales(codigo_barra,tipo,categoria,etiqueta,unidad,ubicacion,stock_min,stock_crit,costo_unitario,proveedor_id)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`, [codigo, tipo, safeText(b.categoria,120), etiqueta, unidad, safeText(b.ubicacion,120), safeInt(b.stock_min), 0, 0, b.proveedor_id ? safeInt(b.proveedor_id) : null]);
+      VALUES(?,?,?,?,?,?,?,?,?,?)`, [codigo, tipo, safeText(b.categoria,120), etiqueta, unidad, safeText(b.ubicacion,120), safeInt(b.stock_min), safeInt(b.stock_crit), 0, b.proveedor_id ? safeInt(b.proveedor_id) : null]);
     if (stockInicial > 0) {
       const fecha = safeText(b.fecha) || nowLocalISO();
       await db.run("INSERT INTO recepciones(tipo,etiqueta,cantidad,fecha,unidad) VALUES(?,?,?,?,?)", [tipo, etiqueta, stockInicial, fecha, unidad]);
@@ -2827,6 +2714,7 @@ app.post('/api/pro/materiales', requireRole('supervisor','administrador'), async
       await rebuildStockForTipo(tipo);
       await recordKardex(req, { codigo_barra:codigo || '', tipo, movimiento:'entrada inicial', entrada:stockInicial, unidad, referencia:`MAT-${r.lastID}`, fecha });
     }
+    await rebuildStockForTipo(tipo);
     await logEvent(req, { action:'create', entity:'pro_materiales', entityId:r.lastID, detail: JSON.stringify({ tipo, codigo_barra: codigo }) });
     await db.exec('COMMIT');
     res.json({ ok:true, id:r.lastID });
@@ -2836,29 +2724,66 @@ app.post('/api/pro/materiales', requireRole('supervisor','administrador'), async
   }
 });
 
-app.put('/api/pro/materiales/:id', requireRole('supervisor','administrador'), async (req, res) => {
-  const id = safeInt(req.params.id);
-  const b = req.body || {};
-  await db.run(`UPDATE pro_materiales SET codigo_barra=?, tipo=?, categoria=?, etiqueta=?, unidad=?, ubicacion=?, stock_min=?, stock_crit=0, costo_unitario=0, proveedor_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-    [safeText(b.codigo_barra,80) || null, safeText(b.tipo,180), safeText(b.categoria,120), safeText(b.etiqueta,180), safeText(b.unidad,40), safeText(b.ubicacion,120), safeInt(b.stock_min), b.proveedor_id ? safeInt(b.proveedor_id) : null, id]);
-  await logEvent(req, { action:'update', entity:'pro_materiales', entityId:id });
-  res.json({ ok:true });
+app.put('/api/pro/materiales/:id', requireRole('supervisor','administrador'), async (req,res) => {
+  const id=safeInt(req.params.id), b=req.body||{};
+  const item=await db.get('SELECT * FROM pro_materiales WHERE id=?',[id]);
+  if(!item) return res.status(404).json({error:'not-found'});
+  const tipo=safeText(b.tipo,180), unidad=safeText(b.unidad,40);
+  if(!tipo || !unidad || !nonNegativeInteger(b.stock_min ?? 0) || !nonNegativeInteger(b.stock_crit ?? 0) || Number(b.stock_crit || 0)>Number(b.stock_min || 0)) return res.status(400).json({error:'invalid'});
+  if(b.proveedor_id && !await db.get('SELECT id FROM pro_proveedores WHERE id=?',[safeInt(b.proveedor_id)]))return res.status(400).json({error:'invalid'});
+  const duplicate=await db.get('SELECT id FROM pro_materiales WHERE LOWER(tipo)=LOWER(?) AND id<>?',[tipo,id]);
+  if(duplicate) return res.status(409).json({error:'duplicate-record'});
+  const history=await db.get('SELECT COUNT(*) AS c FROM pro_kardex WHERE LOWER(tipo)=LOWER(?)',[item.tipo]);
+  const receipts=await db.get('SELECT COUNT(*) AS c FROM recepciones WHERE LOWER(tipo)=LOWER(?)',[item.tipo]);
+  if(unidad!==item.unidad && (history.c || receipts.c)) return res.status(409).json({error:'unit-has-history'});
+  await db.exec('BEGIN IMMEDIATE');
+  try {
+    for(const table of ['stock_productos','recepciones','recepciones_movimientos','stock_retiros','stock_ajustes','pro_kardex','pro_conteos_inventario']) {
+      await db.run(`UPDATE ${table} SET tipo=? WHERE LOWER(tipo)=LOWER(?)`,[tipo,item.tipo]);
+    }
+    await db.run(`UPDATE pro_materiales SET codigo_barra=?,tipo=?,categoria=?,etiqueta=?,unidad=?,ubicacion=?,stock_min=?,stock_crit=?,proveedor_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+      [safeText(b.codigo_barra,80)||null,tipo,safeText(b.categoria,120),safeText(b.etiqueta,180),unidad,safeText(b.ubicacion,120),Number(b.stock_min||0),Number(b.stock_crit||0),b.proveedor_id?Number(b.proveedor_id):null,id]);
+    await rebuildStockForTipo(tipo);
+    await logEvent(req,{action:'update',entity:'pro_materiales',entityId:id});
+    await db.exec('COMMIT'); res.json({ok:true});
+  } catch(error) { await db.exec('ROLLBACK'); throw error; }
+});
+app.delete('/api/pro/materiales/:id', requireRole('supervisor'), async (req,res) => {
+  const item=await db.get('SELECT * FROM pro_materiales WHERE id=?',[safeInt(req.params.id)]);
+  if(!item) return res.status(404).json({error:'not-found'});
+  if(await getStockForTipo(item.tipo)>0) return res.status(409).json({error:'stock-must-be-zero'});
+  await db.run('UPDATE pro_materiales SET activo=0 WHERE id=?',[item.id]);
+  await logEvent(req,{action:'archive',entity:'pro_materiales',entityId:item.id});
+  res.json({ok:true});
+});
+
+app.patch('/api/pro/materiales/:id/activar',requireRole('supervisor'),async(req,res)=>{
+  const id=safeInt(req.params.id);
+  const item=await db.get('SELECT tipo FROM pro_materiales WHERE id=?',[id]);
+  if(!item)return res.status(404).json({error:'not-found'});
+  await db.run('UPDATE pro_materiales SET activo=1,updated_at=CURRENT_TIMESTAMP WHERE id=?',[id]);
+  await rebuildStockForTipo(item.tipo);
+  await logEvent(req,{action:'reactivate',entity:'pro_materiales',entityId:id});
+  res.json({ok:true});
 });
 
 app.post('/api/pro/movimiento', requireRole('supervisor','administrador'), async (req, res) => {
   const b = req.body || {};
   const buscado = safeText(b.codigo_barra || b.tipo || b.material,180);
   const material = await findMaterialByCodeOrName(buscado);
-  const tipo = safeText(b.tipo || material?.tipo || buscado, 180);
+  const tipo = safeText(material?.tipo, 180);
   if (!tipo) return res.status(400).json({ error:'tipo-required' });
   const codigo = safeText(material?.codigo_barra || '', 80);
-  const unidad = safeText(b.unidad || material?.unidad, 40);
-  const cantidad = Math.max(0, safeInt(b.cantidad));
+  if (b.unidad && b.unidad !== material?.unidad) return res.status(400).json({ error:'unit_mismatch' });
+  const unidad = safeText(material?.unidad, 40);
+  if (!nonNegativeInteger(b.cantidad)) return res.status(400).json({ error:'invalid-quantity' });
+  const cantidad = Number(b.cantidad);
   const accion = safeText(b.accion || 'entrada', 20).toLowerCase();
   const fecha = safeText(b.fecha) || nowLocalISO();
   const obs = safeText(b.observacion, 300);
+  if(accion==='ajuste'&&!obs)return res.status(400).json({error:'reason-required'});
   if (!material) return res.status(404).json({ error:'material-not-found' });
-  if (cantidad <= 0) return res.status(400).json({ error:'cantidad-required' });
+  if (cantidad <= 0 && accion !== 'ajuste') return res.status(400).json({ error:'cantidad-required' });
 
   await db.exec('BEGIN IMMEDIATE');
   try {
@@ -2877,9 +2802,10 @@ app.post('/api/pro/movimiento', requireRole('supervisor','administrador'), async
       await rebuildStockForTipo(tipo);
       await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'dispensamiento', salida:cantidad, unidad, referencia:'ALM-SALIDA', observacion:obs, fecha });
     } else if (accion === 'ajuste') {
-      await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, cantidad, unidad]);
+      const before = await getStockForTipo(tipo);
+      await saveStockAdjustment(db,tipo,cantidad,unidad);
       await rebuildStockForTipo(tipo);
-      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'ajuste', entrada:cantidad, unidad, referencia:'AJUSTE', observacion:obs, fecha });
+      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'ajuste', entrada:Math.max(0,cantidad-before), salida:Math.max(0,before-cantidad), unidad, referencia:'AJUSTE', observacion:obs, fecha });
     } else {
       await db.exec('ROLLBACK').catch(()=>{});
       return res.status(400).json({ error:'accion-invalid' });
@@ -2898,7 +2824,7 @@ app.get('/api/pro/kardex', requireAuth, async (req, res) => {
   const { q, from, to } = req.query || {};
   const params = [];
   const clauses = [];
-  const sw = buildTextSearchWhere(q, ['tipo','codigo_barra','referencia','observacion','movimiento']);
+  const sw = buildTextSearchWhere(q, ['tipo','codigo_barra','referencia','observacion','movimiento','username']);
   if (sw.clause) { clauses.push(sw.clause); params.push(...sw.params); }
   const f = buildDateWhere({ field: 'fecha', from, to });
   if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
@@ -2911,20 +2837,21 @@ app.post('/api/pro/conteo', requireRole('supervisor','administrador'), async (re
   const b = req.body || {};
   const buscado = safeText(b.codigo_barra || b.tipo || b.material,180);
   const material = await findMaterialByCodeOrName(buscado);
-  const tipo = safeText(b.tipo || material?.tipo || buscado, 180);
+  const tipo = safeText(material?.tipo, 180);
   if (!material || !tipo) return res.status(404).json({ error:'material-not-found' });
   const codigo = safeText(material?.codigo_barra || '',80);
   const stockSistema = await getStockForTipo(tipo);
-  const stockFisico = safeInt(b.stock_fisico);
+  if (!nonNegativeInteger(b.stock_fisico)) return res.status(400).json({ error:'invalid-quantity' });
+  const stockFisico = Number(b.stock_fisico);
   const dif = stockFisico - stockSistema;
   const fecha = safeText(b.fecha) || nowLocalISO();
   await db.exec('BEGIN IMMEDIATE');
   try {
     await db.run("INSERT INTO pro_conteos_inventario(codigo_barra,tipo,stock_sistema,stock_fisico,diferencia,motivo,fecha,username) VALUES(?,?,?,?,?,?,?,?)", [codigo, tipo, stockSistema, stockFisico, dif, safeText(b.motivo,300), fecha, safeText(req.session.user?.username,80)]);
     if (String(b.aplicar_ajuste || '') === '1') {
-      await db.run("INSERT INTO stock_ajustes(tipo,cantidad,unidad,created_at) VALUES(?,?,?,CURRENT_TIMESTAMP)", [tipo, stockFisico, safeText(b.unidad || material?.unidad,40)]);
+      await saveStockAdjustment(db,tipo,stockFisico,material.unidad);
       await rebuildStockForTipo(tipo);
-      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'conteo físico', entrada:Math.max(stockFisico,0), unidad:safeText(b.unidad || material?.unidad,40), referencia:'CONTEO', observacion:safeText(b.motivo,300), fecha });
+      await recordKardex(req, { codigo_barra:codigo, tipo, movimiento:'conteo físico', entrada:Math.max(dif,0), salida:Math.max(-dif,0), unidad:safeText(b.unidad || material?.unidad,40), referencia:'CONTEO', observacion:safeText(b.motivo,300), fecha });
     }
     await logEvent(req, { action:'conteo', entity:'pro_conteo', entityId:tipo, detail: JSON.stringify({ stockSistema, stockFisico, dif }) });
     await db.exec('COMMIT');
@@ -2936,7 +2863,10 @@ app.post('/api/pro/conteo', requireRole('supervisor','administrador'), async (re
 });
 
 app.get('/api/pro/conteos', requireAuth, async (req, res) => {
-  const rows = await db.all("SELECT * FROM pro_conteos_inventario ORDER BY created_at DESC, id DESC LIMIT 300");
+  const search=buildTextSearchWhere(req.query.q,['tipo','codigo_barra','motivo','username']);
+  const date=buildDateWhere({field:'fecha',from:req.query.from,to:req.query.to});
+  const filter=mergeWhere(date.where,date.params,[search.clause],search.params);
+  const rows=await db.all(`SELECT * FROM pro_conteos_inventario ${filter.where} ORDER BY created_at DESC,id DESC LIMIT 300`,filter.params);
   res.json({ items: rows || [] });
 });
 
@@ -2956,7 +2886,7 @@ app.get('/api/pro/productos-terminados-movimientos', requireAuth, async (req, re
   const { q, from, to } = req.query || {};
   const clauses = [];
   const params = [];
-  const sw = buildTextSearchWhere(q, ['producto','codigo_barra','cliente','observacion','movimiento']);
+  const sw = buildTextSearchWhere(q, ['producto','codigo_barra','cliente','observacion','movimiento','referencia','username']);
   if (sw.clause) { clauses.push(sw.clause); params.push(...sw.params); }
   const f = buildDateWhere({ field: 'fecha', from, to });
   if (f.where) { clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
@@ -2971,36 +2901,54 @@ app.post('/api/pro/productos-terminados', requireRole('supervisor','administrado
   if(!producto) return res.status(400).json({error:'producto-required'});
   const codigo=safeText(b.codigo_barra,80)||null;
   const unidad=safeText(b.unidad,40);
-  const cantidad=Math.max(0, safeInt(b.cantidad ?? b.stock));
+  if(!unidad) return res.status(400).json({error:'invalid'});
+  if(!nonNegativeInteger(b.cantidad ?? b.stock)) return res.status(400).json({error:'invalid-quantity'});
+  const cantidad=Number(b.cantidad ?? b.stock);
   if(cantidad <= 0) return res.status(400).json({error:'cantidad-required'});
   const fecha=safeText(b.fecha)||nowLocalISO();
   const clienteId=b.cliente_id ? safeInt(b.cliente_id) : null;
   const clienteRow=clienteId ? await db.get('SELECT nombre FROM pro_clientes WHERE id=?',[clienteId]) : null;
+  if(clienteId&&!clienteRow) return res.status(400).json({error:'client-required'});
   await db.exec('BEGIN IMMEDIATE');
   try{
     let item = codigo ? await findProductoTerminadoByCodeOrName(codigo) : null;
     if(!item) item = await findProductoTerminadoByCodeOrName(producto);
     let id, saldo;
     if(item){
+      if (unidad && unidad !== item.unidad) { await db.exec('ROLLBACK'); return res.status(409).json({error:'unit_mismatch'}); }
       saldo = safeInt(item.stock) + cantidad;
       id = item.id;
       await db.run(`UPDATE pro_productos_terminados SET codigo_barra=COALESCE(?,codigo_barra), producto=?, descripcion=?, unidad=?, stock=?, cliente_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-        [codigo, producto || item.producto, safeText(b.descripcion || item.descripcion,300), unidad || item.unidad, saldo, clienteId || item.cliente_id || null, id]);
+        [codigo, item.producto, safeText(b.descripcion || item.descripcion,300), unidad || item.unidad, saldo, clienteId || item.cliente_id || null, id]);
     } else {
       const r=await db.run("INSERT INTO pro_productos_terminados(codigo_barra,producto,descripcion,unidad,stock,stock_min,cliente_id) VALUES(?,?,?,?,?,?,?)", [codigo, producto, safeText(b.descripcion,300), unidad, cantidad, 0, clienteId]);
       id=r.lastID; saldo=cantidad;
     }
-    await recordProductoTerminadoMovimiento(req,{producto_id:id,codigo_barra:codigo||'',producto,movimiento:'producción',entrada:cantidad,saldo,unidad,cliente_id:clienteId,cliente:clienteRow?.nombre||'',referencia:'PRODUCCION',observacion:safeText(b.observacion,300),fecha});
+    await recordProductoTerminadoMovimiento(req,{producto_id:id,codigo_barra:codigo||item?.codigo_barra||'',producto:item?.producto||producto,movimiento:'producción',entrada:cantidad,saldo,unidad,cliente_id:clienteId,cliente:clienteRow?.nombre||'',referencia:'PRODUCCION',observacion:safeText(b.observacion,300),fecha});
     await logEvent(req,{action:'create',entity:'pro_productos_terminados',entityId:id,detail:JSON.stringify({producto,cantidad})});
     await db.exec('COMMIT');
     res.json({ok:true,id,stock_actual:saldo});
   }catch(e){ await db.exec('ROLLBACK').catch(()=>{}); throw e; }
 });
 
-app.put('/api/pro/productos-terminados/:id', requireRole('supervisor','administrador'), async (req,res)=>{
-  const b=req.body||{}; const id=safeInt(req.params.id);
-  await db.run("UPDATE pro_productos_terminados SET codigo_barra=?, producto=?, descripcion=?, unidad=?, cliente_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.codigo_barra,80)||null, safeText(b.producto,180), safeText(b.descripcion,300), safeText(b.unidad,40), b.cliente_id ? safeInt(b.cliente_id) : null, id]);
-  res.json({ok:true});
+app.put('/api/pro/productos-terminados/:id',requireRole('supervisor','administrador'),async(req,res)=>{
+  const b=req.body||{},id=safeInt(req.params.id);
+  const item=await db.get('SELECT * FROM pro_productos_terminados WHERE id=?',[id]);
+  if(!item) return res.status(404).json({error:'not-found'});
+  const producto=safeText(b.producto,180),unidad=safeText(b.unidad,40);
+  if(!producto||!unidad) return res.status(400).json({error:'invalid'});
+  const other=await db.get('SELECT id FROM pro_productos_terminados WHERE LOWER(producto)=LOWER(?) AND id<>?',[producto,id]);
+  if(other) return res.status(409).json({error:'duplicate-record'});
+  if(unidad!==item.unidad) return res.status(409).json({error:'unit-has-history'});
+  await db.exec('BEGIN IMMEDIATE');
+  try {
+    await db.run('UPDATE pro_productos_terminados SET codigo_barra=?,producto=?,descripcion=?,cliente_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',[safeText(b.codigo_barra,80)||null,producto,safeText(b.descripcion,300),b.cliente_id?safeInt(b.cliente_id):null,id]);
+    await db.run('UPDATE pro_productos_terminados_movimientos SET producto=? WHERE producto_id=?',[producto,id]);
+    await db.run('UPDATE pro_envios_terminados SET producto=? WHERE producto_id=?',[producto,id]);
+    await db.run('UPDATE pro_ordenes_produccion SET producto=? WHERE LOWER(producto)=LOWER(?)',[producto,item.producto]);
+    await logEvent(req,{action:'update',entity:'pro_productos_terminados',entityId:id});
+    await db.exec('COMMIT');res.json({ok:true});
+  }catch(error){await db.exec('ROLLBACK');throw error;}
 });
 
 app.get('/api/pro/envios-terminados', requireAuth, async (req,res)=>{
@@ -3015,47 +2963,35 @@ app.get('/api/pro/envios-terminados', requireAuth, async (req,res)=>{
   res.json({items:rows||[]});
 });
 
-app.post('/api/pro/envios-terminados', requireRole('supervisor','administrador'), async (req,res)=>{
-  const b=req.body||{};
-  const buscado=safeText(b.buscar || b.codigo_barra || b.producto,180);
-  const item=await findProductoTerminadoByCodeOrName(buscado);
-  if(!item) return res.status(404).json({error:'producto-not-found'});
-  const cantidad=Math.max(0, safeInt(b.cantidad));
-  if(cantidad<=0) return res.status(400).json({error:'cantidad-required'});
-  const stock=safeInt(item.stock);
-  if(stock<cantidad) return res.status(409).json({error:'stock-insuficiente',stock});
-  const clienteId=b.cliente_id ? safeInt(b.cliente_id) : (item.cliente_id || null);
-  const clienteRow=clienteId ? await db.get('SELECT nombre FROM pro_clientes WHERE id=?',[clienteId]) : null;
-  const cliente=safeText(clienteRow?.nombre || b.cliente || item.cliente || '',160);
-  const fecha=safeText(b.fecha)||nowLocalISO();
-  const unidad=safeText(b.unidad || item.unidad,40);
-  const saldo=stock-cantidad;
-  await db.exec('BEGIN IMMEDIATE');
-  try{
-    await db.run('UPDATE pro_productos_terminados SET stock=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',[saldo,item.id]);
-    const r=await db.run(`INSERT INTO pro_envios_terminados(producto_id,codigo_barra,producto,cantidad,unidad,cliente_id,cliente,observacion,username,fecha)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`,[item.id,item.codigo_barra||'',item.producto,cantidad,unidad,clienteId,cliente,safeText(b.observacion,300),safeText(req.session.user?.username,80),fecha]);
-    await recordProductoTerminadoMovimiento(req,{producto_id:item.id,codigo_barra:item.codigo_barra||'',producto:item.producto,movimiento:'envío',salida:cantidad,saldo,unidad,cliente_id:clienteId,cliente,referencia:`ENV-${r.lastID}`,observacion:safeText(b.observacion,300),fecha});
-    await logEvent(req,{action:'create',entity:'pro_envios_terminados',entityId:r.lastID,detail:JSON.stringify({producto:item.producto,cantidad,cliente})});
-    await db.exec('COMMIT');
-    res.json({ok:true,id:r.lastID,stock_actual:saldo});
-  }catch(e){ await db.exec('ROLLBACK').catch(()=>{}); throw e; }
+app.post('/api/pro/envios-terminados',requireRole('supervisor','administrador'),async(req,res)=>{
+  const result=await shipProduct(db,req.body||{},req.session.user.username);
+  await logEvent(req,{action:'create',entity:'pro_envios_terminados',entityId:result.id});
+  res.json(result);
 });
 
 app.get('/api/pro/ordenes-produccion', requireAuth, async (req,res)=>{
-  const rows=await db.all("SELECT * FROM pro_ordenes_produccion ORDER BY created_at DESC, id DESC LIMIT 500"); res.json({items:rows||[]});
+  const search=buildTextSearchWhere(req.query.q,['codigo','producto','estado','observacion']);
+  const rows=await db.all(`SELECT * FROM pro_ordenes_produccion ${search.clause?'WHERE '+search.clause:''} ORDER BY created_at DESC,id DESC LIMIT 500`,search.params);res.json({items:rows||[]});
 });
 app.post('/api/pro/ordenes-produccion', requireRole('supervisor','administrador'), async (req,res)=>{
-  const b=req.body||{}; const codigo=safeText(b.codigo,80) || `OP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+  const b=req.body||{};
+  if(Number(b.cantidad_producida||0)!==0 || b.estado==='Completada') return res.status(400).json({error:'invalid-order'});
+  const codigo=safeText(b.codigo,80) || `OP-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
   const fechaInicio=safeText(b.fecha_inicio,10);
   const fechaFinal=safeText(b.fecha_final,10);
+  if(!safeText(b.producto,180) || !nonNegativeInteger(b.cantidad_planificada) || Number(b.cantidad_planificada)<=0 || !nonNegativeInteger(b.cantidad_producida ?? 0) || Number(b.cantidad_producida||0)>Number(b.cantidad_planificada) || !['Pendiente','En proceso','Completada','Cancelada'].includes(b.estado||'Pendiente') || (fechaFinal && fechaInicio && fechaFinal<fechaInicio)) return res.status(400).json({error:'invalid-order'});
   const r=await db.run("INSERT INTO pro_ordenes_produccion(codigo,producto,cantidad_planificada,cantidad_producida,estado,responsable,observacion,fecha,fecha_inicio,fecha_final) VALUES(?,?,?,?,?,?,?,?,?,?)", [codigo,safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente','',safeText(b.observacion,300),fechaInicio||nowLocalISO(),fechaInicio,fechaFinal]);
   await logEvent(req,{action:'create',entity:'pro_ordenes_produccion',entityId:r.lastID,detail:codigo}); res.json({ok:true,id:r.lastID,codigo});
 });
 app.put('/api/pro/ordenes-produccion/:id', requireRole('supervisor','administrador'), async (req,res)=>{
   const b=req.body||{}; const id=safeInt(req.params.id);
+  const existing=await db.get('SELECT * FROM pro_ordenes_produccion WHERE id=?',[id]);
+  if(!existing) return res.status(404).json({error:'not-found'});
+  if(existing.estado==='Completada' || b.estado==='Completada') return res.status(409).json({error:'order-closed'});
+  if(Number(b.cantidad_producida||0)!==Number(existing.cantidad_producida)) return res.status(400).json({error:'invalid-order'});
   const fechaInicio=safeText(b.fecha_inicio,10);
   const fechaFinal=safeText(b.fecha_final,10);
+  if(!safeText(b.producto,180) || !nonNegativeInteger(b.cantidad_planificada) || Number(b.cantidad_planificada)<=0 || !nonNegativeInteger(b.cantidad_producida ?? 0) || Number(b.cantidad_producida||0)>Number(b.cantidad_planificada) || !['Pendiente','En proceso','Completada','Cancelada'].includes(b.estado||'Pendiente') || (fechaFinal && fechaInicio && fechaFinal<fechaInicio)) return res.status(400).json({error:'invalid-order'});
   await db.run("UPDATE pro_ordenes_produccion SET producto=?, cantidad_planificada=?, cantidad_producida=?, estado=?, responsable='', observacion=?, fecha=?, fecha_inicio=?, fecha_final=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", [safeText(b.producto,180),safeInt(b.cantidad_planificada),safeInt(b.cantidad_producida),safeText(b.estado,40)||'Pendiente',safeText(b.observacion,300),fechaInicio||nowLocalISO(),fechaInicio,fechaFinal,id]);
   res.json({ok:true});
 });
@@ -3063,7 +2999,10 @@ app.put('/api/pro/ordenes-produccion/:id', requireRole('supervisor','administrad
 
 app.get('/api/pro/materiales.pdf', requireAuth, async (req,res)=>{
   const { q, from, to } = req.query || {};
-  const clauses=["m.activo=1"]; const params=[];
+  const clauses=[req.query.stock==='ARCHIVED'?"m.activo=0":"m.activo=1"]; const params=[];
+  if(req.query.stock==='CRITICO')clauses.push('COALESCE(s.cantidad,0)<=m.stock_crit');
+  if(req.query.stock==='BAJO')clauses.push('COALESCE(s.cantidad,0)>m.stock_crit AND COALESCE(s.cantidad,0)<=m.stock_min');
+  if(req.query.stock==='OK')clauses.push('COALESCE(s.cantidad,0)>m.stock_min');
   const sw=buildTextSearchWhere(q, ['m.tipo','m.codigo_barra','m.categoria','m.ubicacion','m.etiqueta','p.nombre']);
   if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
   const f=buildDateWhere({field:'m.created_at',from,to});
@@ -3076,7 +3015,7 @@ app.get('/api/pro/materiales.pdf', requireAuth, async (req,res)=>{
 
 app.get('/api/pro/kardex.pdf', requireAuth, async (req,res)=>{
   const { q, from, to }=req.query||{}; const clauses=[]; const params=[];
-  const sw=buildTextSearchWhere(q, ['tipo','codigo_barra','referencia','observacion','movimiento']);
+  const sw=buildTextSearchWhere(q, ['tipo','codigo_barra','referencia','observacion','movimiento','username']);
   if(sw.clause){ clauses.push(sw.clause); params.push(...sw.params); }
   const f=buildDateWhere({field:'fecha',from,to}); if(f.where){ clauses.push(f.where.replace(/^WHERE\s+/i,'')); params.push(...f.params); }
   const where=clauses.length?`WHERE ${clauses.join(' AND ')}`:'';
@@ -3107,6 +3046,44 @@ app.get('/api/pro/envios-terminados.pdf', requireAuth, async (req,res)=>{
   doc.end();
 });
 
+app.get('/api/pro/productos-terminados-movimientos.pdf',requireAuth,async(req,res)=>{
+  const search=buildTextSearchWhere(req.query.q,['producto','codigo_barra','movimiento','cliente','referencia']);
+  const date=buildDateWhere({field:'fecha',from:req.query.from,to:req.query.to});
+  const filter=mergeWhere(date.where,date.params,[search.clause],search.params);
+  const rows=await db.all(`SELECT * FROM pro_productos_terminados_movimientos ${filter.where} ORDER BY id DESC LIMIT 1000`,filter.params);
+  const doc=startPdf(res,'productos_movimientos.pdf','Productos terminados – Movimientos',{layout:'landscape'});
+  drawTable(doc,['Fecha','Producto','Movimiento','Entrada','Salida','Saldo','Cliente','Referencia'],[95,150,90,55,55,55,100,100],rows.map(row=>[formatPdfDateTime(row.fecha),row.producto,row.movimiento,row.entrada,row.salida,row.saldo,row.cliente,row.referencia]));
+  doc.end();
+});
+
+app.get('/api/pro/:scope.xlsx', requireAuth, async (req,res) => {
+  const configs={
+    materiales:{sql:"SELECT m.codigo_barra AS Código,m.tipo AS Material,m.categoria AS Categoría,m.unidad AS Unidad,COALESCE(s.cantidad,0) AS Stock,m.stock_min AS Mínimo,m.stock_crit AS Crítico,m.ubicacion AS Ubicación FROM pro_materiales m LEFT JOIN stock_productos s ON LOWER(s.tipo)=LOWER(m.tipo) WHERE m.activo=1",fields:['Material','Código','Categoría','Ubicación']},
+    kardex:{sql:'SELECT fecha AS Fecha,tipo AS Material,codigo_barra AS Código,movimiento AS Movimiento,entrada AS Entrada,salida AS Salida,saldo AS Saldo,unidad AS Unidad,observacion AS Observación,username AS Usuario FROM pro_kardex',fields:['Material','Código','Movimiento','Observación']},
+    'productos-terminados':{sql:'SELECT codigo_barra AS Código,producto AS Producto,stock AS Stock,unidad AS Unidad,descripcion AS Descripción FROM pro_productos_terminados WHERE activo=1',fields:['Producto','Código','Descripción']},
+    'productos-terminados-movimientos':{sql:'SELECT fecha AS Fecha,producto AS Producto,codigo_barra AS Código,movimiento AS Movimiento,entrada AS Entrada,salida AS Salida,saldo AS Saldo,unidad AS Unidad,cliente AS Cliente,referencia AS Referencia,username AS Usuario FROM pro_productos_terminados_movimientos',fields:['Producto','Código','Movimiento','Cliente','Referencia']},
+    'envios-terminados':{sql:'SELECT fecha AS Fecha,producto AS Producto,codigo_barra AS Código,cliente AS Cliente,cantidad AS Cantidad,unidad AS Unidad,observacion AS Observación FROM pro_envios_terminados',fields:['Producto','Código','Cliente','Observación']}
+  };
+  const config=configs[req.params.scope];
+  if(!config) return res.status(404).json({error:'not-found'});
+  if(req.params.scope==='materiales'&&req.query.stock==='ARCHIVED'){config.sql=config.sql.replace('WHERE m.activo=1','WHERE m.activo=0');}
+  let rows=await db.all(config.sql);
+  if(req.params.scope==='materiales'&&['CRITICO','BAJO','OK'].includes(req.query.stock))rows=rows.filter(row=>req.query.stock==='CRITICO'?row.Stock<=row.Crítico:req.query.stock==='BAJO'?row.Stock>row.Crítico&&row.Stock<=row.Mínimo:row.Stock>row.Mínimo);
+  const q=safeText(req.query.q,120).toLocaleLowerCase('es');
+  if(q) rows=rows.filter(row=>config.fields.some(field=>String(row[field]||'').toLocaleLowerCase('es').includes(q)));
+  if(req.query.from) rows=rows.filter(row=>!row.Fecha || String(row.Fecha).slice(0,10)>=req.query.from);
+  if(req.query.to) rows=rows.filter(row=>!row.Fecha || String(row.Fecha).slice(0,10)<=req.query.to);
+  const headers=rows.length?Object.keys(rows[0]):config.fields;
+  sendXlsx(res,`${req.params.scope}.xlsx`,[{name:'Inventario',aoa:[headers,...rows.map(row=>headers.map(key=>row[key]??''))]}]);
+});
+
+app.post('/api/pro/ordenes-produccion/:id/completar',requireRole('supervisor','administrador'),async(req,res)=>{
+  const id=safeInt(req.params.id);
+  const result=await completeOrder(db,id,req.session.user.username,safeText(req.body?.unidad,40)||'unidades');
+  await logEvent(req,{action:'complete',entity:'pro_ordenes_produccion',entityId:id});
+  res.json(result);
+});
+
 app.get('/api/pro/dashboard', requireAuth, async (req, res) => {
   const getCount = async (sql, params=[]) => {
     try { const row = await db.get(sql, params); return row?.c || 0; } catch { return 0; }
@@ -3116,17 +3093,17 @@ app.get('/api/pro/dashboard', requireAuth, async (req, res) => {
   const op = await db.get("SELECT COUNT(*) AS c FROM pro_ordenes_produccion WHERE estado IN ('Pendiente','En proceso')");
   const opTotal = await getCount("SELECT COUNT(*) AS c FROM pro_ordenes_produccion");
   const pt = await db.get("SELECT COUNT(*) AS c, COALESCE(SUM(stock),0) AS total FROM pro_productos_terminados WHERE COALESCE(activo,1)=1");
-  const env = await db.get("SELECT COUNT(*) AS c FROM pro_envios_terminados WHERE date(substr(fecha,1,10)) >= date('now','-30 day')");
+  const env = await db.get("SELECT COUNT(*) AS c FROM pro_envios_terminados WHERE date(substr(fecha,1,10)) >= date('now','-5 hours','-30 day')");
   const envTotal = await getCount("SELECT COUNT(*) AS c FROM pro_envios_terminados");
   const kardex = await getCount("SELECT COUNT(*) AS c FROM pro_kardex");
   const conteos = await getCount("SELECT COUNT(*) AS c FROM pro_conteos_inventario");
   const proveedores = await getCount("SELECT COUNT(*) AS c FROM pro_proveedores");
   const clientes = await getCount("SELECT COUNT(*) AS c FROM pro_clientes");
   const defectuosos = await getCount("SELECT COUNT(*) AS c FROM defectuosos");
-  const maquinaria = await getCount("SELECT COUNT(*) AS c FROM maquinaria");
-  const repuestos = await getCount("SELECT COUNT(*) AS c FROM repuestos");
-  const entradas30 = await getCount("SELECT COUNT(*) AS c FROM pro_kardex WHERE movimiento IN ('entrada','entrada inicial','producción') AND date(substr(fecha,1,10)) >= date('now','-30 day')");
-  const salidas30 = await getCount("SELECT COUNT(*) AS c FROM pro_kardex WHERE movimiento IN ('dispensamiento','envío') AND date(substr(fecha,1,10)) >= date('now','-30 day')");
+  const maquinaria = await getCount("SELECT COUNT(*) AS c FROM maquinaria_logs");
+  const repuestos = await getCount("SELECT COUNT(*) AS c FROM repuestos_inventario");
+  const entradas30 = await getCount("SELECT COUNT(*) AS c FROM pro_kardex WHERE movimiento IN ('entrada','entrada inicial','producción') AND date(substr(fecha,1,10)) >= date('now','-5 hours','-30 day')");
+  const salidas30 = await getCount("SELECT COUNT(*) AS c FROM pro_kardex WHERE movimiento IN ('dispensamiento','envío') AND date(substr(fecha,1,10)) >= date('now','-5 hours','-30 day')");
   res.json({
     materiales:mats?.c||0,
     stock_bajo:low?.c||0,
@@ -3151,7 +3128,7 @@ app.get('/api/pro/dashboard', requireAuth, async (req, res) => {
 // -----------------------------------------------------------------------------
 // Healthcheck simple
 // -----------------------------------------------------------------------------
-app.get('/healthz', (req, res) => res.json({ ok: true }));
+app.get('/healthz', async (req, res) => { await db.get('SELECT 1'); res.json({ ok:true }); });
 
 // -----------------------------------------------------------------------------
 // Manejador global de errores
@@ -3161,12 +3138,20 @@ app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
   }
-  res.status(500).json({ error: 'internal-error' });
+  if (err instanceof OperationError) return res.status(err.status).json({error:err.message,...err.detail});
+  if (err.code?.startsWith('SQLITE_CONSTRAINT') || (err.errcode & 255) === 19) return res.status(409).json({ error:'duplicate-record' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error:'size' });
+  if (err instanceof SyntaxError && err.status === 400) return res.status(400).json({ error:'invalid-json' });
+  res.status(500).json({ error:'internal-error' });
 });
 
 // -----------------------------------------------------------------------------
 // Inicio del servidor
 // -----------------------------------------------------------------------------
-app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Brumap running at http://localhost:${PORT} (NODE_ENV=${NODE_ENV})`);
+});
+for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => {
+  server.close(async () => { sessionStore.close(); await db.close(); process.exit(0); });
+  setTimeout(() => process.exit(1),10000).unref();
 });
